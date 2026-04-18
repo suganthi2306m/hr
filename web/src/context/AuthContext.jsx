@@ -38,13 +38,11 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const normalizedEmail = String(email || '').trim().toLowerCase();
+    const devHosts = import.meta.env.DEV
+      ? ['http://localhost:9001/api', 'http://localhost:5000/api']
+      : [];
     const baseCandidates = Array.from(
-      new Set([
-        API_BASE_URL,
-        apiClient.defaults.baseURL,
-        'http://localhost:9001/api',
-        'http://localhost:5000/api',
-      ].filter(Boolean)),
+      new Set([API_BASE_URL, apiClient.defaults.baseURL, ...devHosts].filter(Boolean)),
     );
 
     const performLogin = async () => {

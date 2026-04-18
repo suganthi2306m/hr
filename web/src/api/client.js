@@ -1,6 +1,17 @@
 import axios from 'axios';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+/** Vite inlines VITE_* at build time — set in Vercel and redeploy (clear cache if needed). */
+const fromEnv = (import.meta.env.VITE_API_BASE_URL || '').trim();
+export const API_BASE_URL =
+  fromEnv || (import.meta.env.DEV ? 'http://localhost:5000/api' : '');
+
+if (import.meta.env.PROD && !fromEnv) {
+  // eslint-disable-next-line no-console
+  console.error(
+    '[LiveTrack] VITE_API_BASE_URL is missing at build time. Add it in Vercel → Settings → Environment Variables, then Redeploy (use "Clear cache and redeploy" if it still fails).',
+  );
+}
+
 export const API_BASE_URL_STORAGE_KEY = 'livetrack_api_base_url';
 
 export const TOKEN_KEY = 'livetrack_admin_token';
@@ -35,14 +46,16 @@ apiClient.interceptors.request.use((config) => {
  * @param {object} body
  */
 export async function postPublicAuth(path, body) {
+  const devFallbacks = import.meta.env.DEV
+    ? ['http://localhost:9001/api', 'http://localhost:5000/api']
+    : [];
   const bases = Array.from(
     new Set(
       [
         apiClient.defaults.baseURL,
         API_BASE_URL,
         localStorage.getItem(API_BASE_URL_STORAGE_KEY),
-        'http://localhost:9001/api',
-        'http://localhost:5000/api',
+        ...devFallbacks,
       ].filter(Boolean),
     ),
   );
