@@ -156,6 +156,20 @@ class AttendanceService {
     return out;
   }
 
+  /// Loads all pages for the current user between [from] and [to] (same as [fetchHistory] with range).
+  Future<List<AttendanceRecord>> fetchHistoryAllPages({
+    required DateTime from,
+    required DateTime to,
+  }) =>
+      _fetchHistoryDateRange(from, to);
+
+  /// Recent years of attendance (mobile + web rows); paginates until exhausted.
+  Future<List<AttendanceRecord>> fetchHistoryRecentYears({int years = 3}) async {
+    final to = DateTime.now();
+    final from = DateTime(to.year - years, to.month, to.day);
+    return _fetchHistoryDateRange(from, to);
+  }
+
   Future<List<LeaveRequestRecord>> fetchLeaveStatus() async {
     await _setAuthToken();
     final res = await _api.request<Map<String, dynamic>>(

@@ -2,11 +2,7 @@ import {
   formatAttendanceDateTime,
   formatAttendanceTimeShort,
 } from '../../utils/attendanceTime';
-import {
-  HELP_GPS_ACCURACY,
-  HELP_IDLE_FLAGGED,
-  HELP_PRESENCE_AWAY,
-} from './liveTrackHelpText';
+import { HELP_GPS_ACCURACY, HELP_PRESENCE_AWAY } from './liveTrackHelpText';
 
 function IconBattery({ className }) {
   return (
@@ -249,20 +245,6 @@ export default function LiveTrackLocationDetailPanel({
                 </li>
               ))}
             </ul>
-          </div>
-        ) : null}
-
-        {entry.idleMinutes != null ? (
-          <div
-            className="cursor-help rounded-md border border-slate-200/80 bg-slate-50 px-2 py-1.5 text-center"
-            title={HELP_IDLE_FLAGGED}
-          >
-            <p className="text-[10px] font-semibold text-slate-700">
-              Idle ~{Math.round(entry.idleMinutes)} min{entry.isIdle ? ' (flagged)' : ''}
-            </p>
-            <p className="mt-0.5 text-[9px] leading-tight text-slate-500">
-              Approx. minutes without movement; flagged = over idle threshold.
-            </p>
           </div>
         ) : null}
       </div>

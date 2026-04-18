@@ -146,11 +146,15 @@ function DashboardLayout() {
     .split('/')
     .filter(Boolean);
   const isUserDetailsPage = pathSegments[0] === 'users' && pathSegments.length === 2;
+  const isLiveTrackPage =
+    pathSegments.length >= 2 && pathSegments[0] === 'track' && pathSegments[1] === 'livetrack';
   const pageTitle = isUserDetailsPage
     ? 'User details'
-    : pathSegments.length
-      ? prettifySegment(pathSegments[pathSegments.length - 1])
-      : 'Dashboard';
+    : isLiveTrackPage
+      ? 'Live track'
+      : pathSegments.length
+        ? prettifySegment(pathSegments[pathSegments.length - 1])
+        : 'Dashboard';
 
   useEffect(() => {
     if (admin && !admin.companySetupCompleted) {
@@ -189,10 +193,17 @@ function DashboardLayout() {
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
-      <main className="relative flex-1 p-3 sm:p-4 md:min-h-screen md:rounded-[2rem] md:bg-flux-panel md:p-6 md:shadow-panel-lg lg:p-8">
-        <div className="mb-4 flex min-h-[2.75rem] items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-[1_1_20rem] flex-col justify-center">
-            <TwoToneTitle text={pageTitle} />
+      <main className="relative min-w-0 flex-1 overflow-x-hidden p-3 sm:p-4 md:min-h-screen md:rounded-[2rem] md:bg-flux-panel md:p-6 md:shadow-panel-lg lg:p-8">
+        <div className="mb-4 flex min-h-[2.75rem] items-center justify-between gap-2 sm:gap-3">
+          <div className="flex min-w-0 flex-1 flex-col justify-center">
+            {isLiveTrackPage ? (
+              <h1 className="truncate text-xl font-black tracking-tight sm:text-2xl">
+                <span className="text-primary">Live</span>
+                <span className="text-dark"> track</span>
+              </h1>
+            ) : (
+              <TwoToneTitle text={pageTitle} />
+            )}
             {dashboardTrail ? <div className="mt-2 min-w-0">{dashboardTrail}</div> : null}
           </div>
           <div className="order-2 flex shrink-0 items-center gap-2 sm:order-none">

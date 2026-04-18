@@ -797,6 +797,28 @@ function CustomersPage() {
                   <td className="px-2 py-2 align-middle">
                     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                       <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void updateSingleCustomerStatus(item, isCustomerOperationalActive(item) ? 'inactive' : 'active');
+                        }}
+                        className={clsx(
+                          'inline-flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition',
+                          isCustomerOperationalActive(item)
+                            ? 'border-primary bg-primary'
+                            : 'border-primary/50 bg-primary/15',
+                        )}
+                        aria-label={isCustomerOperationalActive(item) ? 'Set customer inactive' : 'Set customer active'}
+                        title={isCustomerOperationalActive(item) ? 'Active — click to deactivate' : 'Inactive — click to activate'}
+                      >
+                        <span
+                          className={clsx(
+                            'h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform',
+                            isCustomerOperationalActive(item) ? 'translate-x-4' : 'translate-x-0',
+                          )}
+                        />
+                      </button>
+                      <button
                         onClick={() => editCustomer(item)}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 text-dark hover:bg-neutral-100"
                         type="button"

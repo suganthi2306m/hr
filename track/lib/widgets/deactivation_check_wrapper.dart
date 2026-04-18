@@ -12,6 +12,7 @@ import '../services/fcm_service.dart';
 import '../services/geo/live_tracking_service.dart';
 import '../services/geo/location_service.dart';
 import '../services/presence_tracking_service.dart';
+import 'reliable_location_setup_banner.dart';
 
 class DeactivationCheckWrapper extends StatefulWidget {
   const DeactivationCheckWrapper({
@@ -108,6 +109,7 @@ class _DeactivationCheckWrapperState extends State<DeactivationCheckWrapper>
         },
       ),
     );
+    ReliableLocationSetupCoordinator.notifySessionActive();
   }
 
   void _scheduleNextCheck() {
@@ -132,5 +134,13 @@ class _DeactivationCheckWrapperState extends State<DeactivationCheckWrapper>
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        widget.child,
+        ReliableLocationSetupCoordinator(navigatorKey: widget.navigatorKey),
+      ],
+    );
+  }
 }

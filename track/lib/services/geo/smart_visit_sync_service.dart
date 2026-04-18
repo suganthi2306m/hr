@@ -1,6 +1,6 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as dev;
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -16,7 +16,8 @@ import 'package:track/utils/snackbar_utils.dart';
 /// Smart geofence-based company visit auto check-in/out with offline queue.
 /// Only one open visit at a time locally; after checkout, the same customer can auto check-in again the same day.
 /// Uses backend endpoints:
-/// - GET /customers/nearby?lat=..&lng=..&maxDistance=2000 (customers must have geoLocation)
+/// - GET /customers/nearby?lat=..&lng=..&maxDistance=2000 (customers must have geoLocation;
+///   open visits also use saved check-in GPS + company geo for checkout, not only this list)
 /// - POST /company-visits/checkin
 /// - POST /company-visits/checkout
 class SmartVisitSyncService {
@@ -29,15 +30,42 @@ class SmartVisitSyncService {
   static const _kVisit = 'smart_visit_current';
   static const _kQueue = 'smart_visit_queue';
   static const _kLastProcessMs = 'smart_visit_last_process_ms';
+  static const _kLastLat = 'smart_visit_last_lat';
+  static const _kLastLng = 'smart_visit_last_lng';
+  /// Wall-clock checkout after leaving geofence (shared across isolates; replaces [Timer]).
+  static const _kCheckoutDueMs = 'smart_visit_checkout_due_ms';
+  static const _kCheckoutCustomerId = 'smart_visit_checkout_customer_id';
+  /// Single-flight auto check-in across isolates (main + background engine).
+  static const _kCheckinLock = 'smart_visit_checkin_lock';
 
   static const double checkInRadiusM = 50;
   static const double checkOutRadiusM = 50;
   static const int checkoutDelaySeconds = 30;
-  static const int minVisitDurationSeconds = 120;
   static const int processCooldownMs = 8000;
   static const Duration _autoVisitSnackDuration = Duration(seconds: 4);
   final ApiClient _api = ApiClient();
-  Timer? _checkoutTimer;
+
+  /// Cancels a pending checkout only after this many consecutive "inside radius" readings (stale GPS often flaps once).
+  int _confirmedInsideTicks = 0;
+
+  /// Same auto check-in/out snackbar was being shown on every location tick / retry; show at most once per [key] per [_autoVisitSnackDuration].
+  final Map<String, int> _autoSnackLastShownMsByKey = {};
+
+  bool _shouldEmitAutoSnack(String dedupeKey) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _autoSnackLastShownMsByKey[dedupeKey];
+    if (last != null &&
+        now - last < _autoVisitSnackDuration.inMilliseconds) {
+      return false;
+    }
+    _autoSnackLastShownMsByKey[dedupeKey] = now;
+    if (_autoSnackLastShownMsByKey.length > 24) {
+      _autoSnackLastShownMsByKey.removeWhere(
+        (_, ms) => now - ms > const Duration(minutes: 2).inMilliseconds,
+      );
+    }
+    return true;
+  }
 
   /// DevTools Logging (name `CompanyVisitAuto`) + debug console when [kDebugMode].
   void _visitLog(String message) {
@@ -49,18 +77,51 @@ class SmartVisitSyncService {
     }
   }
 
-  Future<void> _delayedCheckout({
-    required String scheduledCustomerId,
-    required double lat,
-    required double lng,
-  }) async {
+  /// Returns lock value `opaque|startMs` if this isolate won; caller must [_releaseCheckinLock] in `finally`.
+  Future<String?> _tryAcquireCheckinLock(
+    SharedPreferences prefs,
+    int nowMs,
+  ) async {
+    const ttlMs = 90000;
+    final raw = prefs.getString(_kCheckinLock);
+    if (raw != null && raw.isNotEmpty) {
+      final parts = raw.split('|');
+      if (parts.length >= 2) {
+        final started = int.tryParse(parts.last) ?? 0;
+        if (nowMs - started < ttlMs) {
+          return null;
+        }
+      }
+    }
+    final opaque = '${Random().nextInt(0x7fffffff)}_${Random().nextInt(0x7fffffff)}';
+    final value = '$opaque|$nowMs';
+    await prefs.setString(_kCheckinLock, value);
+    await Future<void>.delayed(Duration.zero);
+    if (prefs.getString(_kCheckinLock) != value) {
+      return null;
+    }
+    return value;
+  }
+
+  Future<void> _releaseCheckinLock(SharedPreferences prefs, String? lockValue) async {
+    if (lockValue == null) return;
+    if (prefs.getString(_kCheckinLock) == lockValue) {
+      await prefs.remove(_kCheckinLock);
+    }
+  }
+
+  Future<void> _delayedCheckout({required String scheduledCustomerId}) async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final lat = prefs.getDouble(_kLastLat);
+      final lng = prefs.getDouble(_kLastLng);
+      if (lat == null || lng == null) {
+        _visitLog('$_logTag delayed checkout: no last lat/lng in prefs');
+        return;
+      }
       final latestVisit = await _loadVisit();
       if (latestVisit == null) return;
       if (latestVisit.customerId != scheduledCustomerId) return;
-      final elapsed =
-          DateTime.now().difference(latestVisit.checkInTime).inSeconds;
-      if (elapsed < minVisitDurationSeconds) return;
       await _checkOut(latestVisit, lat, lng);
     } catch (e, _) {
       _visitLog('$_logTag delayed checkout error: $e');
@@ -71,6 +132,28 @@ class SmartVisitSyncService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final nowMs = DateTime.now().millisecondsSinceEpoch;
+      await prefs.setDouble(_kLastLat, lat);
+      await prefs.setDouble(_kLastLng, lng);
+
+      // Fires even when the heavy tick below is cooldown-skipped (background / second engine).
+      final due = prefs.getInt(_kCheckoutDueMs);
+      final dueCid = prefs.getString(_kCheckoutCustomerId);
+      if (due != null &&
+          dueCid != null &&
+          dueCid.isNotEmpty &&
+          nowMs >= due) {
+        await prefs.remove(_kCheckoutDueMs);
+        await prefs.remove(_kCheckoutCustomerId);
+        _confirmedInsideTicks = 0;
+        _visitLog(
+          '$_logTag wall-clock delayed checkout firing customerId=$dueCid',
+        );
+        await _delayedCheckout(scheduledCustomerId: dueCid);
+        if (await _loadVisit() == null) {
+          return;
+        }
+      }
+
       final lastMs = prefs.getInt(_kLastProcessMs) ?? 0;
       if (nowMs - lastMs < processCooldownMs) {
         _visitLog(
@@ -106,13 +189,37 @@ class SmartVisitSyncService {
         }
         if (inRange.isNotEmpty) {
           final selected = inRange.first;
-          _visitLog(
-            '$_logTag AUTO CHECK-IN → customerId=${selected.customerId} '
-            'name=${selected.displayName ?? "—"} '
-            'distance=${selected.distanceM?.toStringAsFixed(1) ?? "—"}m '
-            '(radius<=${checkInRadiusM}m)',
-          );
-          await _checkIn(selected, lat, lng);
+          if (await _loadVisit() != null) {
+            _visitLog(
+              '$_logTag skip auto check-in: open visit exists (re-check before lock)',
+            );
+            return;
+          }
+          final lockValue = await _tryAcquireCheckinLock(prefs, nowMs);
+          if (lockValue == null) {
+            _visitLog(
+              '$_logTag skip auto check-in: another check-in in progress or lock race',
+            );
+            return;
+          }
+          try {
+            if (await _loadVisit() != null) {
+              _visitLog(
+                '$_logTag skip auto check-in: open visit after lock (same company until checkout)',
+              );
+              return;
+            }
+            _visitLog(
+              '$_logTag AUTO CHECK-IN → customerId=${selected.customerId} '
+              'name=${selected.displayName ?? "—"} '
+              'distance=${selected.distanceM?.toStringAsFixed(1) ?? "—"}m '
+              '(radius<=${checkInRadiusM}m)',
+            );
+            await _checkIn(selected, lat, lng);
+          } finally {
+            final p2 = await SharedPreferences.getInstance();
+            await _releaseCheckinLock(p2, lockValue);
+          }
         } else if (nearby.isNotEmpty) {
           _visitLog(
             '$_logTag no auto check-in: ${nearby.length} nearby but none within '
@@ -122,31 +229,72 @@ class SmartVisitSyncService {
         return;
       }
 
-      final stillNear = nearby.any((n) => n.customerId == visit.customerId && (n.distanceM ?? 1e9) <= checkOutRadiusM);
+      // Compare to check-in GPS and to company geo from check-in (not only /customers/nearby,
+      // which is capped at 2 km — so checkout still works far away once anchors exist).
+      final double? aLat = visit.anchorLat;
+      final double? aLng = visit.anchorLng;
+      final double? cLat = visit.companyLat;
+      final double? cLng = visit.companyLng;
+      final bool stillNearByCheckInGps = aLat != null &&
+          aLng != null &&
+          gl.Geolocator.distanceBetween(lat, lng, aLat, aLng) <= checkOutRadiusM;
+      final bool stillNearByCompanyPin = cLat != null &&
+          cLng != null &&
+          gl.Geolocator.distanceBetween(lat, lng, cLat, cLng) <= checkOutRadiusM;
+      final bool stillNearByNearby = nearby.any(
+        (n) =>
+            n.customerId == visit.customerId &&
+            (n.distanceM ?? 1e9) <= checkOutRadiusM,
+      );
+      final bool haveSavedAnchors = (aLat != null && aLng != null) ||
+          (cLat != null && cLng != null);
+      final bool stillNear = haveSavedAnchors
+          ? (stillNearByCheckInGps || stillNearByCompanyPin)
+          : stillNearByNearby;
       if (stillNear) {
+        final distCheckInM = (aLat != null && aLng != null)
+            ? gl.Geolocator.distanceBetween(lat, lng, aLat, aLng)
+            : null;
+        final distCompanyM = (cLat != null && cLng != null)
+            ? gl.Geolocator.distanceBetween(lat, lng, cLat, cLng)
+            : null;
         _visitLog(
-          '$_logTag still within checkout radius customerId=${visit.customerId}',
+          '$_logTag still within checkout radius customerId=${visit.customerId} '
+          'distCheckInM=${distCheckInM?.toStringAsFixed(1) ?? "—"} '
+          'distCompanyM=${distCompanyM?.toStringAsFixed(1) ?? "—"} '
+          'byNearby=$stillNearByNearby',
         );
-        _checkoutTimer?.cancel();
+        final pendingCheckout = prefs.getInt(_kCheckoutDueMs) != null;
+        if (pendingCheckout) {
+          _confirmedInsideTicks++;
+          if (_confirmedInsideTicks >= 2) {
+            await prefs.remove(_kCheckoutDueMs);
+            await prefs.remove(_kCheckoutCustomerId);
+            _confirmedInsideTicks = 0;
+            _visitLog(
+              '$_logTag cancelled wall-clock checkout (confirmed back inside)',
+            );
+          }
+        } else {
+          _confirmedInsideTicks = 0;
+        }
         return;
       }
+      _confirmedInsideTicks = 0;
 
-      // Delay checkout to avoid GPS drift (async work must not throw from Timer — zone would log unhandled).
-      final scheduledCustomerId = visit.customerId;
-      _visitLog(
-        '$_logTag scheduling delayed checkout in ${checkoutDelaySeconds}s '
-        'customerId=$scheduledCustomerId (left ${checkOutRadiusM}m radius)',
-      );
-      _checkoutTimer ??= Timer(const Duration(seconds: checkoutDelaySeconds), () {
-        _checkoutTimer = null;
-        unawaited(
-          _delayedCheckout(
-            scheduledCustomerId: scheduledCustomerId,
-            lat: lat,
-            lng: lng,
-          ),
+      final existingCid = prefs.getString(_kCheckoutCustomerId);
+      final existingDue = prefs.getInt(_kCheckoutDueMs);
+      if (existingDue == null || existingCid != visit.customerId) {
+        await prefs.setInt(
+          _kCheckoutDueMs,
+          nowMs + checkoutDelaySeconds * 1000,
         );
-      });
+        await prefs.setString(_kCheckoutCustomerId, visit.customerId);
+        _visitLog(
+          '$_logTag checkout scheduled in ${checkoutDelaySeconds}s wall-clock '
+          'customerId=${visit.customerId}',
+        );
+      }
     } catch (e, _) {
       _visitLog('$_logTag onLocationUpdate error: $e');
     }
@@ -164,6 +312,9 @@ class SmartVisitSyncService {
   void _showAutoCheckInBanner(String companyName, {required bool queuedOffline}) {
     final context = FcmService.navigatorKey?.currentContext;
     if (context == null) return;
+    final dedupeKey =
+        'ci|${companyName.trim().toLowerCase()}|${queuedOffline ? 'q' : 'ok'}';
+    if (!_shouldEmitAutoSnack(dedupeKey)) return;
     final phrase = _companyLineLabel(companyName);
     final at = DateDisplayUtil.formatForDisplay(DateTime.now(), 'hh:mm a');
     SnackBarUtils.showSnackBar(
@@ -181,6 +332,8 @@ class SmartVisitSyncService {
   void _showAutoCheckoutBanner(String? companyName, {int? visitMinutes}) {
     final context = FcmService.navigatorKey?.currentContext;
     if (context == null) return;
+    final dedupeKey = 'co|${(companyName ?? '').trim().toLowerCase()}';
+    if (!_shouldEmitAutoSnack(dedupeKey)) return;
     final phrase = _companyLineLabel(
       (companyName != null && companyName.trim().isNotEmpty) ? companyName : null,
     );
@@ -201,6 +354,19 @@ class SmartVisitSyncService {
 
   Future<void> _checkIn(_NearbyCustomer nearbyCustomer, double lat, double lng) async {
     final customerId = nearbyCustomer.customerId;
+    final open = await _loadVisit();
+    if (open != null) {
+      if (open.customerId == customerId) {
+        _visitLog(
+          '$_logTag check-in skipped: already have open visit for this customer until checkout',
+        );
+        return;
+      }
+      _visitLog(
+        '$_logTag check-in skipped: open visit for another customerId=${open.customerId}',
+      );
+      return;
+    }
     final payload = {
       'customerId': customerId,
       'lat': lat,
@@ -227,6 +393,10 @@ class SmartVisitSyncService {
         visitId: item?['_id']?.toString(),
         customerId: customerId,
         checkInTime: DateTime.now(),
+        anchorLat: lat,
+        anchorLng: lng,
+        companyLat: nearbyCustomer.companyLat,
+        companyLng: nearbyCustomer.companyLng,
       ));
       final companyFromServer =
           item?['companyName']?.toString() ?? item?['customerName']?.toString();
@@ -253,7 +423,15 @@ class SmartVisitSyncService {
       } catch (e2, _) {
         _visitLog('$_logTag enqueue checkin failed: $e2');
       }
-      await _saveVisit(_CurrentVisit(visitId: null, customerId: customerId, checkInTime: DateTime.now()));
+      await _saveVisit(_CurrentVisit(
+        visitId: null,
+        customerId: customerId,
+        checkInTime: DateTime.now(),
+        anchorLat: lat,
+        anchorLng: lng,
+        companyLat: nearbyCustomer.companyLat,
+        companyLng: nearbyCustomer.companyLng,
+      ));
       final label = nearbyCustomer.displayName ?? customerId;
       _visitLog(
         '$_logTag check-in queued locally (offline/API fail) customer=$label',
@@ -269,7 +447,6 @@ class SmartVisitSyncService {
       'lat': lat,
       'lng': lng,
       'checkOutTime': DateTime.now().toUtc().toIso8601String(),
-      'minDurationSeconds': minVisitDurationSeconds,
     };
     _visitLog(
       '$_logTag POST /company-visits/checkout visitId=${visit.visitId} '
@@ -339,6 +516,8 @@ class SmartVisitSyncService {
           distanceM: dist,
           displayName:
               (m['companyName'] ?? m['customerName'] ?? m['name'])?.toString(),
+          companyLat: clat,
+          companyLng: clng,
         );
       }).where((x) => x.customerId.isNotEmpty).toList();
     } on DioException catch (e) {
@@ -415,10 +594,26 @@ class SmartVisitSyncService {
       final customerId = m['customerId']?.toString();
       final checkIn = DateDisplayUtil.parseFromApiAsLocal(m['checkInTime']);
       if (customerId == null || checkIn == null) return null;
+      double? alat = m['anchorLat'] is num ? (m['anchorLat'] as num).toDouble() : null;
+      double? alng = m['anchorLng'] is num ? (m['anchorLng'] as num).toDouble() : null;
+      if (alat == null || alng == null) {
+        alat = null;
+        alng = null;
+      }
+      double? clat = m['companyLat'] is num ? (m['companyLat'] as num).toDouble() : null;
+      double? clng = m['companyLng'] is num ? (m['companyLng'] as num).toDouble() : null;
+      if (clat == null || clng == null) {
+        clat = null;
+        clng = null;
+      }
       return _CurrentVisit(
         visitId: m['visitId']?.toString(),
         customerId: customerId,
         checkInTime: checkIn,
+        anchorLat: alat,
+        anchorLng: alng,
+        companyLat: clat,
+        companyLng: clng,
       );
     } catch (_) {
       return null;
@@ -427,12 +622,22 @@ class SmartVisitSyncService {
 
   Future<void> _saveVisit(_CurrentVisit visit) async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kCheckoutDueMs);
+    await prefs.remove(_kCheckoutCustomerId);
     await prefs.setString(
       _kVisit,
       jsonEncode({
         'visitId': visit.visitId,
         'customerId': visit.customerId,
         'checkInTime': visit.checkInTime.toIso8601String(),
+        if (visit.anchorLat != null && visit.anchorLng != null) ...{
+          'anchorLat': visit.anchorLat,
+          'anchorLng': visit.anchorLng,
+        },
+        if (visit.companyLat != null && visit.companyLng != null) ...{
+          'companyLat': visit.companyLat,
+          'companyLng': visit.companyLng,
+        },
       }),
     );
   }
@@ -440,14 +645,30 @@ class SmartVisitSyncService {
   Future<void> _clearVisit() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kVisit);
+    await prefs.remove(_kCheckoutDueMs);
+    await prefs.remove(_kCheckoutCustomerId);
   }
 }
 
 class _CurrentVisit {
-  const _CurrentVisit({required this.visitId, required this.customerId, required this.checkInTime});
+  const _CurrentVisit({
+    required this.visitId,
+    required this.customerId,
+    required this.checkInTime,
+    this.anchorLat,
+    this.anchorLng,
+    this.companyLat,
+    this.companyLng,
+  });
   final String? visitId;
   final String customerId;
   final DateTime checkInTime;
+  /// Device GPS at auto check-in; checkout uses distance to this (any range from server pin).
+  final double? anchorLat;
+  final double? anchorLng;
+  /// Customer record geo at check-in (from /customers/nearby); optional second fence.
+  final double? companyLat;
+  final double? companyLng;
 }
 
 class _NearbyCustomer {
@@ -455,8 +676,12 @@ class _NearbyCustomer {
     required this.customerId,
     required this.distanceM,
     this.displayName,
+    this.companyLat,
+    this.companyLng,
   });
   final String customerId;
   final double? distanceM;
   final String? displayName;
+  final double? companyLat;
+  final double? companyLng;
 }

@@ -29,6 +29,17 @@ const userSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
+// Prevent "" from being stored on ObjectId refs (clients sometimes send empty string).
+// Mongoose 9 document hooks may not pass `next`; use a sync hook (no callback).
+userSchema.pre('validate', function () {
+    for (const key of ['branchId', 'companyId', 'roleId']) {
+        const v = this.get(key);
+        if (v === '' || (typeof v === 'string' && v.trim() === '')) {
+            this.set(key, undefined);
+        }
+    }
+});
+
 // Encrypt password before saving
 // Encrypt password before saving
 userSchema.pre('save', async function () {

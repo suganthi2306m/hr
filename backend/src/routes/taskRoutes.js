@@ -45,6 +45,8 @@ const upload = multer({
 
 router.get('/', getAllTasks);
 router.get('/staff/:staffId', getTasksByStaffId);
+// Mobile app uses GET /api/tasks/user/:userId — same handler as /staff/:staffId.
+router.get('/user/:staffId', getTasksByStaffId);
 router.get('/:id/completion-report', getCompletionReport);
 router.get('/:id/tracking-path', protect, getTrackingPath);
 router.get('/:id', getTaskById);

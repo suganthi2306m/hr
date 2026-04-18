@@ -7,7 +7,12 @@ import LiveTrackLocationDetailPanel from '../components/liveTrack/LiveTrackLocat
 import LiveTrackStaffCards from '../components/liveTrack/LiveTrackStaffCards';
 import UiSelect from '../components/common/UiSelect';
 import { useGoogleMaps } from '../context/GoogleMapsContext';
-import { FLUX_PRIMARY, FLUX_ROUTE_GOLD, fluxCircleMarkerIcon, getFluxMapOptions } from '../theme/fluxMap';
+import {
+  FLUX_ROUTE_GOLD,
+  getFluxMapOptions,
+  getStaffLocationPinIcon,
+  staffPinColorForUserId,
+} from '../theme/fluxMap';
 
 const mapContainerStyle = { width: '100%', height: '65vh' };
 const ROUTE_POLYLINE_SNAP_METERS = 900;
@@ -58,23 +63,15 @@ function nearestRoutePoint(orderedEntries, clickLat, clickLng, maxMeters) {
   return best;
 }
 
-/** Interior polyline vertex indices for tappable numbered samples (excludes first/last; those use dedicated pins). */
-function interiorRouteIndices(length, maxInterior) {
-  if (length < 3) return [];
-  const inner = length - 2;
-  if (inner <= maxInterior) {
-    return Array.from({ length: inner }, (_, k) => k + 1);
-  }
-  const out = [];
-  for (let k = 0; k < maxInterior; k += 1) {
-    const t = (k + 1) / (maxInterior + 1);
-    const idx = 1 + Math.floor(t * inner);
-    out.push(idx);
-  }
-  return [...new Set(out)].sort((a, b) => a - b);
+/** S / E label colour on user-coloured pins (contrast). */
+function pinLabelTextColor(hex) {
+  if (!hex || typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return '#ffffff';
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.62 ? '#111111' : '#ffffff';
 }
-
-const ROUTE_WAYPOINT_CAP = 26;
 
 function LiveTrackPage() {
   const [trackingPoints, setTrackingPoints] = useState([]);
@@ -247,23 +244,18 @@ function LiveTrackPage() {
     return { start: routeOrdered[0], end: routeOrdered[routeOrdered.length - 1] };
   }, [routeOrdered]);
 
-  const routeWaypoints = useMemo(() => {
-    if (!historyUserId) return [];
-    const n = routeOrdered.length;
-    return interiorRouteIndices(n, ROUTE_WAYPOINT_CAP).map((i) => ({
-      key: `${historyUserId}-${routeOrdered[i]._id || i}-${i}`,
-      entry: routeOrdered[i],
-      label: String(i + 1),
-    }));
-  }, [historyUserId, routeOrdered]);
+  /** Same hue as live pin for this user — polyline + S/E markers. */
+  const routeTrailColor = useMemo(
+    () => (historyUserId ? staffPinColorForUserId(historyUserId) : FLUX_ROUTE_GOLD),
+    [historyUserId],
+  );
 
   const mapStats = useMemo(() => {
-    const workers = staffUsers.length;
+    const staff = staffUsers.length;
     const active = dayLatestPoints.filter((p) => p.isActive).length;
     const inactive = dayLatestPoints.filter((p) => !p.isActive).length;
-    const points = historyUserId ? routeOrdered.length : dayLatestPoints.length;
-    return { workers, active, inactive, points };
-  }, [staffUsers.length, dayLatestPoints, historyUserId, routeOrdered.length]);
+    return { staff, active, inactive };
+  }, [staffUsers.length, dayLatestPoints]);
 
   useEffect(() => {
     if (isLoaded && window.google?.maps && !geocoderRef.current) {
@@ -375,15 +367,6 @@ function LiveTrackPage() {
 
   return (
     <section className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-black tracking-tight text-dark">Live tracking</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Staff positions, daily trails, and point-level detail — pick a staff member or tap the map.
-          </p>
-        </div>
-      </div>
-
       <div className="grid gap-4 rounded-2xl border border-neutral-200/90 bg-white p-4 shadow-panel sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
         <div className="form-field lg:col-span-4">
           <label htmlFor="track-user" className="form-label">
@@ -449,46 +432,18 @@ function LiveTrackPage() {
           >
             {historyUserId && polylinePath.length > 1 && (
               <Polyline
+                key={`trail-${historyUserId}-${routeTrailColor}`}
                 path={polylinePath}
                 onLoad={(poly) => setRoutePolyline(poly)}
                 onUnmount={() => setRoutePolyline(null)}
                 options={{
-                  strokeColor: FLUX_ROUTE_GOLD,
+                  strokeColor: routeTrailColor,
                   strokeOpacity: 0.95,
                   strokeWeight: 5,
                   clickable: true,
                 }}
               />
             )}
-
-            {historyUserId &&
-              routeWaypoints.map(({ key, entry, label }) => (
-                <Marker
-                  key={key}
-                  position={{ lat: entry.latitude, lng: entry.longitude }}
-                  title={`Point ${label} — open details`}
-                  zIndex={3}
-                  onClick={(e) => {
-                    e?.domEvent?.stopPropagation?.();
-                    setMapDetail({ source: 'route', entry });
-                  }}
-                  label={{
-                    text: label,
-                    color: '#ffffff',
-                    fontSize: '10px',
-                    fontWeight: '700',
-                  }}
-                  icon={
-                    window.google?.maps
-                      ? fluxCircleMarkerIcon(window.google, {
-                          fill: '#15803d',
-                          stroke: '#ffffff',
-                          scale: 10,
-                        })
-                      : undefined
-                  }
-                />
-              ))}
 
             {routeEndpoints.start && routeEndpoints.end && historyUserId && (
               <>
@@ -501,14 +456,15 @@ function LiveTrackPage() {
                     e?.domEvent?.stopPropagation?.();
                     setMapDetail({ source: 'route', entry: routeEndpoints.start });
                   }}
-                  label={{ text: 'S', color: '#ffffff', fontSize: '11px', fontWeight: '800' }}
+                  label={{
+                    text: 'S',
+                    color: pinLabelTextColor(routeTrailColor),
+                    fontSize: '11px',
+                    fontWeight: '800',
+                  }}
                   icon={
                     window.google?.maps
-                      ? fluxCircleMarkerIcon(window.google, {
-                          fill: '#16a34a',
-                          stroke: '#ffffff',
-                          scale: 10,
-                        })
+                      ? getStaffLocationPinIcon(window.google, { fill: routeTrailColor, active: true })
                       : undefined
                   }
                 />
@@ -521,14 +477,15 @@ function LiveTrackPage() {
                     e?.domEvent?.stopPropagation?.();
                     setMapDetail({ source: 'route', entry: routeEndpoints.end });
                   }}
-                  label={{ text: 'E', color: '#111111', fontSize: '11px', fontWeight: '800' }}
+                  label={{
+                    text: 'E',
+                    color: pinLabelTextColor(routeTrailColor),
+                    fontSize: '11px',
+                    fontWeight: '800',
+                  }}
                   icon={
                     window.google?.maps
-                      ? fluxCircleMarkerIcon(window.google, {
-                          fill: FLUX_PRIMARY,
-                          stroke: '#111111',
-                          scale: 12,
-                        })
+                      ? getStaffLocationPinIcon(window.google, { fill: routeTrailColor, active: true })
                       : undefined
                   }
                 />
@@ -536,6 +493,7 @@ function LiveTrackPage() {
             )}
 
             {filteredLocations.map((item) => {
+              const pinFill = staffPinColorForUserId(item.userId);
               return (
                 <Marker
                   key={item.userId}
@@ -548,10 +506,9 @@ function LiveTrackPage() {
                   }}
                   icon={
                     window.google?.maps
-                      ? fluxCircleMarkerIcon(window.google, {
-                          fill: item.isActive ? FLUX_PRIMARY : '#111111',
-                          stroke: '#ffffff',
-                          scale: item.isActive ? 12 : 10,
+                      ? getStaffLocationPinIcon(window.google, {
+                          fill: pinFill,
+                          active: !!item.isActive,
                         })
                       : undefined
                   }
@@ -560,30 +517,26 @@ function LiveTrackPage() {
             })}
           </GoogleMap>
 
-          <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[min(100%-1.5rem,20rem)]">
-            <div className="pointer-events-auto rounded-2xl border border-neutral-200/90 bg-white/95 p-3 shadow-panel backdrop-blur-sm">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Overview</p>
-              <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <div className="pointer-events-none absolute left-2 top-2 z-10 max-w-[min(100%-1rem,14rem)]">
+            <div className="pointer-events-auto rounded-xl border border-neutral-200/90 bg-white/95 px-2.5 py-2 shadow-panel backdrop-blur-sm">
+              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Current</p>
+              <dl className="mt-1 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
                 <div>
-                  <dt className="text-xs text-slate-500">Workers</dt>
-                  <dd className="font-black text-dark">{mapStats.workers}</dd>
+                  <dt className="text-[10px] text-slate-500">Staffs</dt>
+                  <dd className="text-sm font-black text-dark">{mapStats.staff}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs text-slate-500">Points</dt>
-                  <dd className="font-black text-dark">{mapStats.points}</dd>
+                  <dt className="text-[10px] text-emerald-600">Active</dt>
+                  <dd className="text-sm font-bold text-emerald-700">{mapStats.active}</dd>
                 </div>
-                <div>
-                  <dt className="text-xs text-emerald-600">Active</dt>
-                  <dd className="font-bold text-emerald-700">{mapStats.active}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-slate-500">Inactive</dt>
-                  <dd className="font-bold text-slate-700">{mapStats.inactive}</dd>
+                <div className="col-span-2">
+                  <dt className="text-[10px] text-slate-500">Inactive</dt>
+                  <dd className="text-sm font-bold text-slate-700">{mapStats.inactive}</dd>
                 </div>
               </dl>
-              <p className="mt-2 border-t border-neutral-100 pt-2 text-[11px] text-slate-500">
-                Pins on map: {filteredLocations.length}
-                {polylinePath.length > 1 ? ` · Trail: ${polylinePath.length} pts` : ''}
+              <p className="mt-1.5 border-t border-neutral-100 pt-1.5 text-[10px] leading-tight text-slate-500">
+                Pins: {filteredLocations.length}
+                {polylinePath.length > 1 ? ` · Trail ${polylinePath.length} pts` : ''}
               </p>
             </div>
           </div>
@@ -607,11 +560,11 @@ function LiveTrackPage() {
             <div className="flex flex-1 flex-col justify-center p-5">
               <h2 className="text-sm font-bold text-dark">Point details</h2>
               <p className="mt-3 text-xs leading-relaxed text-slate-600">
-                Tap a <strong className="text-dark">staff pin</strong> (latest position), a{' '}
-                <strong className="text-dark">numbered green</strong> sample along the route,{' '}
-                <strong className="text-dark">S / E</strong> for start or end, or{' '}
-                <strong className="text-dark">click the yellow line</strong> to snap to the nearest GPS point. This
-                panel shows address, battery, presence, GPS accuracy, and task context.
+                Tap a <strong className="text-dark">staff pin</strong> (latest position),{' '}
+                <strong className="text-dark">S</strong> or <strong className="text-dark">E</strong> on that staff
+                member&apos;s trail (same colour as their line), or{' '}
+                <strong className="text-dark">click the trail line</strong> to snap to the nearest GPS point. This panel
+                shows address, battery, presence, GPS accuracy, and task context.
               </p>
             </div>
           )}

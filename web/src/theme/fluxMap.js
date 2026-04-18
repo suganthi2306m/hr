@@ -42,6 +42,54 @@ export function fluxCircleMarkerIcon(google, { fill = '#111111', stroke = '#ffff
   };
 }
 
+/** Stable saturated colours for live staff pins (one colour per user id). */
+const STAFF_TRACKING_PIN_PALETTE = [
+  '#2563eb',
+  '#dc2626',
+  '#059669',
+  '#7c3aed',
+  '#ea580c',
+  '#0891b2',
+  '#b45309',
+  '#db2777',
+  '#4338ca',
+  '#0f766e',
+  '#be123c',
+  '#1d4ed8',
+];
+
+export function staffPinColorForUserId(userId) {
+  const s = String(userId ?? '');
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const idx = Math.abs(h) % STAFF_TRACKING_PIN_PALETTE.length;
+  return STAFF_TRACKING_PIN_PALETTE[idx];
+}
+
+/**
+ * Teardrop location pin (data-URL) for live tracking — not a circle.
+ * @param {boolean} [active=true] — inactive pins render slightly faded.
+ */
+export function getStaffLocationPinIcon(google, { fill = '#2563eb', active = true } = {}) {
+  if (!google?.maps?.Size || !google?.maps?.Point) return undefined;
+  const w = 36;
+  const h = 48;
+  const opacity = active ? '1' : '0.55';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 36 48">
+    <path fill="${fill}" fill-opacity="${opacity}" stroke="#ffffff" stroke-width="1.25" d="M18 2C10.3 2 4 8.1 4 15.5c0 7.2 14 28.5 14 28.5S32 22.7 32 15.5C32 8.1 25.7 2 18 2z"/>
+    <circle cx="18" cy="16" r="4.2" fill="#ffffff" fill-opacity="${opacity}"/>
+  </svg>`;
+  const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  return {
+    url,
+    scaledSize: new google.maps.Size(w, h),
+    anchor: new google.maps.Point(18, 48),
+  };
+}
+
 /** Teardrop map pin (PNG data-URL) — Customers / Locations markers */
 export function getCustomerMapPinIcon(google, { active = true } = {}) {
   if (!google?.maps?.Size || !google?.maps?.Point) return undefined;

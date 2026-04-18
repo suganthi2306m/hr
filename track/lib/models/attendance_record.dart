@@ -35,6 +35,12 @@ class AttendanceRecord {
     this.checkOutLocation,
     required this.durationMinutes,
     required this.status,
+    this.method,
+    this.minutesWorked,
+    this.note,
+    this.leaveKind,
+    this.lateFlag,
+    this.earlyExitFlag,
   });
 
   final String id;
@@ -48,12 +54,21 @@ class AttendanceRecord {
   final AttendanceGeo? checkOutLocation;
   final int durationMinutes;
   final String status;
+  /// `manual` | `geo` | `auto` (web/admin rows).
+  final String? method;
+  final int? minutesWorked;
+  final String? note;
+  final String? leaveKind;
+  final bool? lateFlag;
+  final bool? earlyExitFlag;
 
   factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
     final checkIn = DateDisplayUtil.parseFromApiAsLocal(json['checkInTime']) ??
         DateDisplayUtil.parseFromApiAsLocal(json['checkInAt']);
     final checkOut = DateDisplayUtil.parseFromApiAsLocal(json['checkOutTime']) ??
         DateDisplayUtil.parseFromApiAsLocal(json['checkOutAt']);
+    final duration =
+        (json['duration'] as num?)?.round() ?? (json['minutesWorked'] as num?)?.round() ?? 0;
     return AttendanceRecord(
       id: json['_id']?.toString() ?? '',
       attendanceDate: DateDisplayUtil.parseFromApiAsLocal(json['attendanceDate']),
@@ -69,10 +84,16 @@ class AttendanceRecord {
               json['checkOutLocation'] as Map<String, dynamic>,
             )
           : null,
-      durationMinutes: (json['duration'] as num?)?.round() ?? 0,
+      durationMinutes: duration,
       status: json['status']?.toString() ??
           json['dayStatus']?.toString() ??
           'PENDING',
+      method: json['method']?.toString(),
+      minutesWorked: (json['minutesWorked'] as num?)?.round(),
+      note: json['note']?.toString(),
+      leaveKind: json['leaveKind']?.toString(),
+      lateFlag: json['lateFlag'] is bool ? json['lateFlag'] as bool : null,
+      earlyExitFlag: json['earlyExitFlag'] is bool ? json['earlyExitFlag'] as bool : null,
     );
   }
 }

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Company = require('../models/Company');
 const Admin = require('../models/Admin');
 
@@ -24,12 +25,18 @@ async function upsertCompany(req, res, next) {
     if (Array.isArray(req.body.branches)) {
       update.branches = req.body.branches
         .filter((b) => b && String(b.name || '').trim())
-        .map((b) => ({
-          name: String(b.name).trim(),
-          code: String(b.code || '').trim(),
-          address: String(b.address || '').trim(),
-          phone: String(b.phone || '').trim(),
-        }));
+        .map((b) => {
+          const row = {
+            name: String(b.name).trim(),
+            code: String(b.code || '').trim(),
+            address: String(b.address || '').trim(),
+            phone: String(b.phone || '').trim(),
+          };
+          if (b._id && mongoose.Types.ObjectId.isValid(String(b._id))) {
+            return { ...row, _id: new mongoose.Types.ObjectId(String(b._id)) };
+          }
+          return row;
+        });
     }
 
     const company = await Company.findOneAndUpdate({ adminId: req.admin._id }, update, {

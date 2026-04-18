@@ -327,11 +327,11 @@ class PresenceTrackingService {
     await prefs.setString(_kPresenceAppLifecycleState, 'closed');
   }
 
-  static Future<String> _getLifecycleAppStatusForBackgroundInsert() async {
+  /// [sendPresenceFromBackground] always runs in the headless engine — never `active`.
+  static Future<String> _headlessPresenceAppStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final state = prefs.getString(_kPresenceAppLifecycleState);
     if (state == 'closed') return 'app_closed';
-    if (state == 'foreground') return 'active';
     return 'app_background';
   }
 
@@ -428,9 +428,26 @@ class PresenceTrackingService {
     final prefs = await SharedPreferences.getInstance();
     final token = _sanitizeStoredToken(prefs.getString('token'));
     if (token == null || token.isEmpty) return;
-    final lifecycleState = prefs.getString(_kPresenceAppLifecycleState);
-    if (lifecycleState == 'foreground') {
-      return;
+
+    // Do **not** bail out when prefs still say `foreground`. This method is only invoked from
+    // [backgroundCallback] (native location → headless isolate). After swipe-away / process
+    // death, [AppLifecycleState.paused] may never run, so the pref can stay stale `foreground`
+    // and would block all DB writes until the user opens the app again.
+
+    // Company visit auto check-out must run on **every** background fix, not only when the
+    // 1‑minute presence throttle allows a POST — otherwise checkout is never scheduled.
+    if (AppConstants.enableSmartVisitSync) {
+      unawaited(
+        SmartVisitSyncService()
+            .onLocationUpdate(lat: lat, lng: lng)
+            .catchError((Object e, StackTrace _) {
+          if (kDebugMode) {
+            debugPrint(
+              '[PresenceTracking] CompanyVisitAuto onLocationUpdate (bg): $e',
+            );
+          }
+        }),
+      );
     }
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -458,7 +475,7 @@ class PresenceTrackingService {
       'lat': lat,
       'lng': lng,
       'status': 'active',
-      'appStatus': await _getLifecycleAppStatusForBackgroundInsert(),
+      'appStatus': await _headlessPresenceAppStatus(),
       'timestamp': capturedAt.toIso8601String(),
     };
     final pinnedRaw = prefs.getString(_kPresencePinnedGeofenceLocation);

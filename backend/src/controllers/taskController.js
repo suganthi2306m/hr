@@ -353,7 +353,7 @@ exports.getAllTasks = async (req, res) => {
 exports.getTasksByStaffId = async (req, res) => {
   try {
     const { staffId } = req.params;
-    console.log('[Tasks] GET /tasks/staff/:staffId - staffId:', staffId);
+    console.log('[Tasks] GET tasks by staff/user — staffId:', staffId);
     const tasks = await Task.find({ assignedTo: staffId })
       .populate('assignedTo')
       .populate('customerId');

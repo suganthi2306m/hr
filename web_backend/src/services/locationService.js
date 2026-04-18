@@ -39,7 +39,7 @@ function normalizeTaskId(taskId) {
 
 async function fetchUsersMap(userIds = []) {
   if (!userIds.length) return new Map();
-  const users = await User.find({ _id: { $in: userIds } }).select('name isActive companyId').lean();
+  const users = await User.find({ _id: { $in: userIds } }).select('name isActive companyId branchId').lean();
   return new Map(users.map((user) => [String(user._id), user]));
 }
 
@@ -74,7 +74,13 @@ function toLocationEntry(doc, userMap, taskMap, fencesByCompany) {
   const idleMinutes = Math.max(0, Math.round(dayjs().diff(dayjs(ts), 'minute', true)));
   const isIdle = idleMinutes > 15;
   const cid = user?.companyId ? String(user.companyId) : null;
-  const fences = cid && fencesByCompany ? fencesByCompany.get(cid) || [] : [];
+  const fencesAll = cid && fencesByCompany ? fencesByCompany.get(cid) || [] : [];
+  const userBranch = user?.branchId ? String(user.branchId).trim() : '';
+  const fences = fencesAll.filter((g) => {
+    if (g.isActive === false) return false;
+    if (!g.branchId) return true;
+    return userBranch && String(g.branchId) === userBranch;
+  });
   const geofenceStatus = fences.map((g) => {
     const distM = haversineKm(lat, lng, g.lat, g.lng) * 1000;
     return {
@@ -132,7 +138,7 @@ async function enrichLocationDocs(docs) {
   let fencesByCompany = new Map();
   if (companyIds.length) {
     const oids = companyIds.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id));
-    const fences = await GeoFence.find({ companyId: { $in: oids } }).lean();
+    const fences = await GeoFence.find({ companyId: { $in: oids }, isActive: { $ne: false } }).lean();
     fencesByCompany = fences.reduce((map, g) => {
       const k = String(g.companyId);
       if (!map.has(k)) map.set(k, []);

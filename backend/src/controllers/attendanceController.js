@@ -403,13 +403,18 @@ exports.getHistory = async (req, res) => {
     }
 
     if (req.query.from || req.query.to) {
-      query.checkInTime = {};
-      if (req.query.from) query.checkInTime.$gte = new Date(req.query.from);
-      if (req.query.to) query.checkInTime.$lte = new Date(req.query.to);
+      const timeCond = {};
+      if (req.query.from) timeCond.$gte = new Date(req.query.from);
+      if (req.query.to) timeCond.$lte = new Date(req.query.to);
+      query.$and = [...(query.$and || []), { $or: [{ checkInTime: timeCond }, { checkInAt: timeCond }] }];
     }
 
     const [items, total] = await Promise.all([
-      Attendance.find(query).sort({ checkInTime: -1 }).skip(skip).limit(limit).lean(),
+      Attendance.find(query)
+        .sort({ attendanceDate: -1, checkInTime: -1, checkInAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       Attendance.countDocuments(query),
     ]);
 

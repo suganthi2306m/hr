@@ -312,7 +312,7 @@ class LocationService {
         }
       }
 
-      final preciseEnabled = await _isPreciseLocationEnabled();
+      final preciseEnabled = await isPreciseLocationEnabled();
       if (!preciseEnabled && context.mounted) {
         final open = await _showLocationPermissionDialog(
           context,
@@ -391,6 +391,91 @@ class LocationService {
     } finally {
       _ensurePersistentTaskTrackingAccessInProgress = false;
     }
+  }
+
+  /// Snapshot of permissions needed so presence / company visits can upload while the app is
+  /// backgrounded, the screen is off, or the Android task is cleared (foreground service rules).
+  static Future<AttendanceLocationReliabilitySnapshot>
+      snapshotAttendanceLocationReliability() async {
+    final gpsEnabled = await gl.Geolocator.isLocationServiceEnabled();
+    final perm = await gl.Geolocator.checkPermission();
+    final foregroundLocationAllowed = perm != gl.LocationPermission.denied &&
+        perm != gl.LocationPermission.deniedForever;
+    final backgroundLocationAllowed = Platform.isAndroid
+        ? await Permission.locationAlways.isGranted
+        : perm == gl.LocationPermission.always;
+    final preciseLocationEnabled = await isPreciseLocationEnabled();
+    final batteryOptimizationIgnored =
+        !Platform.isAndroid || await Permission.ignoreBatteryOptimizations.isGranted;
+    final postNotificationsAllowed =
+        !Platform.isAndroid || await Permission.notification.isGranted;
+    final activityRecognitionAllowed =
+        !Platform.isAndroid || await Permission.activityRecognition.isGranted;
+
+    return AttendanceLocationReliabilitySnapshot(
+      gpsEnabled: gpsEnabled,
+      foregroundLocationAllowed: foregroundLocationAllowed,
+      backgroundLocationAllowed: backgroundLocationAllowed,
+      preciseLocationEnabled: preciseLocationEnabled,
+      batteryOptimizationIgnored: batteryOptimizationIgnored,
+      postNotificationsAllowed: postNotificationsAllowed,
+      activityRecognitionAllowed: activityRecognitionAllowed,
+    );
+  }
+
+  /// Dialogs + OS prompts for [snapshotAttendanceLocationReliability] items.
+  static Future<void> requestAttendanceLocationReliabilitySetup(
+    BuildContext context,
+  ) async {
+    if (!context.mounted) return;
+    await ensureAppLocationAccess(context, requestBackgroundAlways: true);
+    if (!context.mounted) return;
+
+    if (Platform.isAndroid) {
+      await showBackgroundLocationDisclosureAndRequest(
+        context,
+        title: 'Always-on location for LiveTrack',
+        message:
+            'So attendance presence and company visits can update when the app is in the background, '
+            'not on screen, or cleared from recent apps (where Android still allows a location notification), '
+            'this app needs “Allow all the time” in Android location settings.\n\n'
+            'Data is sent to your organization for work tracking only—not for advertising.',
+      );
+      if (context.mounted) {
+        await ensureAppLocationAccess(context, requestBackgroundAlways: true);
+      }
+    } else {
+      final perm = await gl.Geolocator.checkPermission();
+      if (perm == gl.LocationPermission.whileInUse && context.mounted) {
+        final open = await _showLocationPermissionDialog(
+          context,
+          emoji: '📍',
+          title: 'Set location to Always',
+          message:
+              'For attendance and visits while LiveTrack is in the background or the screen is off, '
+              'open Settings → LiveTrack → Location and choose Always.',
+          confirmText: 'Open Settings',
+        );
+        if (open == true) await openAppSettings();
+      }
+    }
+
+    if (!context.mounted) return;
+    await ensurePersistentTaskTrackingAccess(context);
+
+    if (Platform.isAndroid && context.mounted) {
+      final notif = await Permission.notification.status;
+      if (!notif.isGranted) {
+        await Permission.notification.request();
+      }
+      if (!context.mounted) return;
+      final ar = await Permission.activityRecognition.status;
+      if (!ar.isGranted) {
+        await Permission.activityRecognition.request();
+      }
+    }
+
+    await syncLocationPermissionStatusToBackend();
   }
 
   static Future<bool?> _showLocationPermissionDialog(
@@ -485,7 +570,7 @@ class LocationService {
     );
   }
 
-  static Future<bool> _isPreciseLocationEnabled() async {
+  static Future<bool> isPreciseLocationEnabled() async {
     try {
       final permission = await gl.Geolocator.checkPermission();
       if (permission == gl.LocationPermission.denied ||
@@ -544,7 +629,7 @@ class LocationService {
       final hasBackgroundAlways = Platform.isAndroid
           ? await Permission.locationAlways.isGranted
           : permission == gl.LocationPermission.always;
-      final preciseEnabled = await _isPreciseLocationEnabled();
+      final preciseEnabled = await isPreciseLocationEnabled();
 
       _api.setAuthToken(token);
       await _api.dio.put<dynamic>(
@@ -614,5 +699,55 @@ class LocationService {
           end.longitude,
         ) /
         1000; // Convert to kilometers
+  }
+}
+
+/// Result of [LocationService.snapshotAttendanceLocationReliability].
+class AttendanceLocationReliabilitySnapshot {
+  const AttendanceLocationReliabilitySnapshot({
+    required this.gpsEnabled,
+    required this.foregroundLocationAllowed,
+    required this.backgroundLocationAllowed,
+    required this.preciseLocationEnabled,
+    required this.batteryOptimizationIgnored,
+    required this.postNotificationsAllowed,
+    required this.activityRecognitionAllowed,
+  });
+
+  final bool gpsEnabled;
+  final bool foregroundLocationAllowed;
+  final bool backgroundLocationAllowed;
+  final bool preciseLocationEnabled;
+  final bool batteryOptimizationIgnored;
+  final bool postNotificationsAllowed;
+  final bool activityRecognitionAllowed;
+
+  bool get needsSetup =>
+      !gpsEnabled ||
+      !foregroundLocationAllowed ||
+      !backgroundLocationAllowed ||
+      !preciseLocationEnabled ||
+      !batteryOptimizationIgnored ||
+      !postNotificationsAllowed ||
+      !activityRecognitionAllowed;
+
+  List<String> missingLabels() {
+    final o = <String>[];
+    if (!gpsEnabled) o.add('Turn on GPS / location services');
+    if (!foregroundLocationAllowed) o.add('Allow location access for this app');
+    if (!backgroundLocationAllowed) {
+      o.add('Set location to Allow all the time (Android) or Always (iOS)');
+    }
+    if (!preciseLocationEnabled) o.add('Enable precise location');
+    if (!batteryOptimizationIgnored) {
+      o.add('Turn off battery restrictions for LiveTrack (Android)');
+    }
+    if (!postNotificationsAllowed) {
+      o.add('Allow notifications (needed for the tracking notification on Android)');
+    }
+    if (!activityRecognitionAllowed) {
+      o.add('Allow Physical activity (improves walk / drive detection)');
+    }
+    return o;
   }
 }

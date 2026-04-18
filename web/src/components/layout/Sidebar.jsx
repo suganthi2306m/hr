@@ -17,6 +17,7 @@ const trackLinks = [
 const opsLinks = [
   { to: '/dashboard/operations/attendance', label: 'Attendance', icon: 'attendance' },
   { to: '/dashboard/operations/leave', label: 'Leave', icon: 'leave' },
+  { to: '/dashboard/operations/geofences', label: 'Geofences', icon: 'geofence' },
 ];
 
 const settingsLink = { to: '/dashboard/settings', label: 'Settings', icon: 'settings' };
@@ -115,6 +116,13 @@ function NavIcon({ name }) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
           <path d="M5 19c5.5 0 12.2-2.2 14-9.5C12.5 9.5 8 12.5 5 19Z" />
           <path d="M5 19c-.3-3.6.7-6.7 3.4-9.4" />
+        </svg>
+      );
+    case 'geofence':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <circle cx="12" cy="12" r="8" strokeDasharray="3 3" />
         </svg>
       );
     default:
