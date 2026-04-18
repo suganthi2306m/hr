@@ -48,22 +48,182 @@ function parseTimeForDate(baseDate, hh = '', mm = '', meridiem = 'AM') {
   return d;
 }
 
+/** Wall-clock time on a calendar day, given that day's local midnight as a UTC instant (from client). */
+function parseTimeFromDayStartUtc(dayStartUtc, hh = '', mm = '', meridiem = 'AM') {
+  if (!dayStartUtc || Number.isNaN(dayStartUtc.getTime())) return null;
+  if (hh === '' || mm === '') return null;
+  const hNum = Number(hh);
+  const mNum = Number(mm);
+  if (!Number.isFinite(hNum) || !Number.isFinite(mNum)) return null;
+  let h24 = hNum % 12;
+  if (String(meridiem || 'AM').toUpperCase() === 'PM') h24 += 12;
+  const ms = (h24 * 60 + mNum) * 60 * 1000;
+  return new Date(dayStartUtc.getTime() + ms);
+}
+
+function parseClientIso(s) {
+  if (s == null) return null;
+  if (s instanceof Date && !Number.isNaN(s.getTime())) return s;
+  if (typeof s === 'number' && Number.isFinite(s)) return new Date(s);
+  if (typeof s !== 'string') return null;
+  const t = s.trim();
+  if (!t) return null;
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Prefer epoch ms from the browser (exact local wall clock); then ISO string. */
+function instantFromEpochMsOrIso(body, msField, isoField) {
+  const raw = body[msField];
+  if (raw !== undefined && raw !== null && raw !== '') {
+    const n =
+      typeof raw === 'bigint'
+        ? Number(raw)
+        : typeof raw === 'number' && Number.isFinite(raw)
+          ? raw
+          : Number(raw);
+    if (Number.isFinite(n) && n > 1e12) {
+      const d = new Date(n);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+  }
+  return parseClientIso(body[isoField]);
+}
+
+function isReasonableTzOffset(tzo) {
+  const n = Number(tzo);
+  return Number.isFinite(n) && n >= -840 && n <= 840;
+}
+
+/**
+ * Same calendar day as the browser's <input type="date"> when given
+ * `Date.getTimezoneOffset()` from that browser (minutes: UTC − local; IST ⇒ −330).
+ * start = local midnight as UTC instant; end = local end-of-day.
+ */
+function dayRangeFromDayKeyAndTzOffset(dayKey, tzo) {
+  const dk = normalizeDayKey(dayKey);
+  if (!dk || !isReasonableTzOffset(tzo)) return null;
+  const [y, month, d] = dk.split('-').map(Number);
+  const startMs = Date.UTC(y, month - 1, d, 0, 0, 0, 0) + Number(tzo) * 60 * 1000;
+  const endMs = startMs + 24 * 60 * 60 * 1000 - 1;
+  return { start: new Date(startMs), end: new Date(endMs) };
+}
+
+/** Daily range: explicit ISO pair, else YYYY-MM-DD + timeZoneOffsetMinutes from client. */
+function resolveDayRangeFromRequest({ query = {}, body = {} }) {
+  const startRaw = query.dayStart || body.dayStartISO;
+  const endRaw = query.dayEnd || body.dayEndISO;
+  const start = parseClientIso(startRaw);
+  const end = parseClientIso(endRaw);
+  if (start && end) return { start, end };
+
+  const dayKey =
+    normalizeDayKey(body.date ?? body.attendanceDate) ?? normalizeDayKey(query.date);
+  const tzoRaw = body.timeZoneOffsetMinutes ?? query.timeZoneOffsetMinutes;
+  if (dayKey && tzoRaw !== undefined && tzoRaw !== null && isReasonableTzOffset(tzoRaw)) {
+    return dayRangeFromDayKeyAndTzOffset(dayKey, Number(tzoRaw));
+  }
+  return null;
+}
+
+/** Supervisor calendar date from <input type="date"> — canonical key for one row per user per day. */
+function normalizeDayKey(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, m, d] = s.split('-').map(Number);
+  if (!Number.isFinite(y) || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const t = new Date(y, m - 1, d);
+  if (t.getFullYear() !== y || t.getMonth() !== m - 1 || t.getDate() !== d) return null;
+  return s;
+}
+
+function formatLocalYmdFromDate(d) {
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const yyyy = d.getFullYear();
+  const mm = `${d.getMonth() + 1}`.padStart(2, '0');
+  const dd = `${d.getDate()}`.padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+/**
+ * One attendance document per (companyId, userId, calendar day).
+ * Merges legacy duplicates (same dayKey or overlapping attendanceDate) and deletes extras.
+ */
+async function resolveSingleDayAttendanceDoc(companyId, userId, dayKey, rangeStart, rangeEnd) {
+  const orClause = [];
+  if (dayKey) orClause.push({ attendanceDayKey: dayKey });
+  if (rangeStart && rangeEnd && !Number.isNaN(rangeStart.getTime()) && !Number.isNaN(rangeEnd.getTime())) {
+    orClause.push({ attendanceDate: { $gte: rangeStart, $lte: rangeEnd } });
+  }
+  if (!orClause.length) return null;
+
+  const candidates = await Attendance.find({ companyId, userId, $or: orClause }).sort({ createdAt: 1 });
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => {
+    const ap = dayKey && String(a.attendanceDayKey) === dayKey;
+    const bp = dayKey && String(b.attendanceDayKey) === dayKey;
+    if (ap !== bp) return ap ? -1 : 1;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+  const keeper = candidates[0];
+  const dupIds = candidates.slice(1).map((c) => c._id);
+  if (dupIds.length) await Attendance.deleteMany({ _id: { $in: dupIds } });
+  return Attendance.findById(keeper._id);
+}
+
 async function getDailyAttendance(req, res, next) {
   try {
     const companyId = await getCompanyIdForAdmin(req.admin._id);
     if (!companyId) return res.status(400).json({ message: 'Complete company setup first.' });
 
-    const day = normalizeDateOnly(req.query.date);
-    if (!day) return res.status(400).json({ message: 'Invalid date.' });
-    const dayEnd = endOfDay(day);
-    const q = {
-      companyId,
-      attendanceDate: { $gte: day, $lte: dayEnd },
-    };
+    const fromClient = resolveDayRangeFromRequest({ query: req.query });
+    let day;
+    let dayEnd;
+    if (fromClient) {
+      day = fromClient.start;
+      dayEnd = fromClient.end;
+    } else {
+      day = normalizeDateOnly(req.query.date);
+      if (!day) return res.status(400).json({ message: 'Invalid date.' });
+      dayEnd = endOfDay(day);
+    }
+    const dayKey = normalizeDayKey(req.query.date);
+    const q = { companyId };
+    if (dayKey) {
+      q.$or = [
+        { attendanceDayKey: dayKey },
+        { attendanceDate: { $gte: day, $lte: dayEnd } },
+      ];
+    } else {
+      q.attendanceDate = { $gte: day, $lte: dayEnd };
+    }
     if (req.query.userId && mongoose.Types.ObjectId.isValid(String(req.query.userId))) {
       q.userId = req.query.userId;
     }
-    const items = await Attendance.find(q).sort({ checkInAt: -1 }).lean();
+    const raw = await Attendance.find(q).sort({ updatedAt: -1 }).lean();
+    const groups = new Map();
+    for (const row of raw) {
+      const uid = String(row.userId);
+      if (!groups.has(uid)) groups.set(uid, []);
+      groups.get(uid).push(row);
+    }
+    const dupIds = [];
+    const items = [];
+    for (const rows of groups.values()) {
+      rows.sort((a, b) => {
+        const ap = dayKey && String(a.attendanceDayKey) === dayKey;
+        const bp = dayKey && String(b.attendanceDayKey) === dayKey;
+        if (ap !== bp) return ap ? -1 : 1;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      });
+      const keeper = rows[0];
+      items.push(keeper);
+      for (let i = 1; i < rows.length; i += 1) dupIds.push(rows[i]._id);
+    }
+    if (dupIds.length) await Attendance.deleteMany({ _id: { $in: dupIds } });
+
     return res.json({ items, date: day.toISOString() });
   } catch (e) {
     return next(e);
@@ -75,6 +235,13 @@ async function checkIn(req, res, next) {
     const companyId = await getCompanyIdForAdmin(req.admin._id);
     if (!companyId) return res.status(400).json({ message: 'Complete company setup first.' });
     const { userId, lat, lng, method } = req.body;
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] POST /attendance/check-in', {
+      adminId: String(req.admin?._id || ''),
+      userId: String(userId || ''),
+      method: method || 'manual',
+      hasLatLng: lat != null && lng != null,
+    });
     if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
       return res.status(400).json({ message: 'userId is required.' });
     }
@@ -84,15 +251,47 @@ async function checkIn(req, res, next) {
     if (open) {
       return res.status(409).json({ message: 'User already checked in. Check out first.', item: open });
     }
+    const ad = normalizeDateOnly(new Date());
+    const dayKey = formatLocalYmdFromDate(ad);
+    const sameDay = dayKey
+      ? await Attendance.findOne({ companyId, userId, attendanceDayKey: dayKey })
+      : null;
+    if (sameDay) {
+      sameDay.checkInAt = new Date();
+      sameDay.attendanceDate = ad;
+      sameDay.dayStatus = 'PRESENT';
+      sameDay.checkOutAt = undefined;
+      sameDay.checkOutLat = undefined;
+      sameDay.checkOutLng = undefined;
+      sameDay.minutesWorked = null;
+      sameDay.checkInLat = lat != null ? Number(lat) : undefined;
+      sameDay.checkInLng = lng != null ? Number(lng) : undefined;
+      sameDay.method = method === 'geo' ? 'geo' : 'manual';
+      await sameDay.save();
+      // eslint-disable-next-line no-console
+      console.log('[Attendance][api] check-in updated same-day row', {
+        id: String(sameDay._id),
+        checkInAt: sameDay.checkInAt?.toISOString?.(),
+        attendanceDayKey: sameDay.attendanceDayKey,
+      });
+      return res.status(201).json({ item: sameDay });
+    }
     const item = await Attendance.create({
       companyId,
       userId,
       checkInAt: new Date(),
-      attendanceDate: normalizeDateOnly(new Date()),
+      attendanceDate: ad,
+      attendanceDayKey: dayKey,
       dayStatus: 'PRESENT',
       checkInLat: lat != null ? Number(lat) : undefined,
       checkInLng: lng != null ? Number(lng) : undefined,
       method: method === 'geo' ? 'geo' : 'manual',
+    });
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] check-in created', {
+      id: String(item._id),
+      checkInAt: item.checkInAt?.toISOString?.(),
+      attendanceDayKey: item.attendanceDayKey,
     });
     return res.status(201).json({ item });
   } catch (e) {
@@ -105,6 +304,11 @@ async function checkOut(req, res, next) {
     const companyId = await getCompanyIdForAdmin(req.admin._id);
     if (!companyId) return res.status(400).json({ message: 'Complete company setup first.' });
     const { userId, lat, lng } = req.body;
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] POST /attendance/check-out', {
+      adminId: String(req.admin?._id || ''),
+      userId: String(userId || ''),
+    });
     if (!userId) return res.status(400).json({ message: 'userId is required.' });
     const open = await Attendance.findOne({ userId, companyId, checkOutAt: null }).sort({ checkInAt: -1 });
     if (!open) return res.status(404).json({ message: 'No open check-in.' });
@@ -115,6 +319,12 @@ async function checkOut(req, res, next) {
     open.checkOutLng = lng != null ? Number(lng) : undefined;
     open.minutesWorked = minutesWorked;
     await open.save();
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] check-out saved', {
+      id: String(open._id),
+      checkOutAt: open.checkOutAt?.toISOString?.(),
+      minutesWorked: open.minutesWorked,
+    });
     return res.json({ item: open });
   } catch (e) {
     return next(e);
@@ -125,29 +335,62 @@ async function markStatus(req, res, next) {
   try {
     const companyId = await getCompanyIdForAdmin(req.admin._id);
     if (!companyId) return res.status(400).json({ message: 'Complete company setup first.' });
-    const { userId, status, date, note, loginTime, logoutTime, leaveKind } = req.body;
+    const {
+      userId,
+      status,
+      date,
+      note,
+      loginTime,
+      logoutTime,
+      leaveKind,
+    } = req.body;
     if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
       return res.status(400).json({ message: 'userId is required.' });
     }
-    const day = normalizeDateOnly(date);
-    if (!day) return res.status(400).json({ message: 'Invalid date.' });
-    const dayEnd = endOfDay(day);
+    const clientRange = resolveDayRangeFromRequest({ body: req.body });
+    let day;
+    let dayEnd;
+    if (clientRange) {
+      day = clientRange.start;
+      dayEnd = clientRange.end;
+    } else {
+      day = normalizeDateOnly(date);
+      if (!day) return res.status(400).json({ message: 'Invalid date.' });
+      dayEnd = endOfDay(day);
+    }
 
     const statusNorm = String(status || '').toUpperCase().trim();
     if (!['PRESENT', 'ABSENT', 'LEAVE', 'HOLIDAY'].includes(statusNorm)) {
       return res.status(400).json({ message: 'Invalid status.' });
     }
 
-    let item = await Attendance.findOne({
-      companyId,
-      userId,
-      attendanceDate: { $gte: day, $lte: dayEnd },
-    }).sort({ createdAt: -1 });
+    const dayKey = normalizeDayKey(date);
+    if (!dayKey) {
+      return res.status(400).json({ message: 'Invalid or missing date (expected YYYY-MM-DD).' });
+    }
+
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] POST /attendance/mark', {
+      adminId: String(req.admin?._id || ''),
+      userId: String(userId),
+      status: statusNorm,
+      date,
+      checkInAt: req.body.checkInAt,
+      checkInAtMs: req.body.checkInAtMs,
+      checkOutAt: req.body.checkOutAt,
+      checkOutAtMs: req.body.checkOutAtMs,
+      timeZoneOffsetMinutes: req.body.timeZoneOffsetMinutes,
+      hasDayStartISO: Boolean(req.body.dayStartISO),
+      loginTime: req.body.loginTime,
+    });
+
+    let item = await resolveSingleDayAttendanceDoc(companyId, userId, dayKey, day, dayEnd);
 
     if (!item) {
       item = new Attendance({
         companyId,
         userId,
+        attendanceDayKey: dayKey,
         attendanceDate: day,
         checkInAt: day,
         dayStatus: statusNorm,
@@ -155,19 +398,58 @@ async function markStatus(req, res, next) {
       });
     }
 
-    const inTime = parseTimeForDate(
-      day,
-      loginTime?.hh ?? '',
-      loginTime?.mm ?? '',
-      loginTime?.meridiem ?? 'AM',
-    );
-    const outTime = parseTimeForDate(
-      day,
-      logoutTime?.hh ?? '',
-      logoutTime?.mm ?? '',
-      logoutTime?.meridiem ?? 'PM',
-    );
+    const checkInFromBody = instantFromEpochMsOrIso(req.body, 'checkInAtMs', 'checkInAt');
+    const checkOutFromBody = instantFromEpochMsOrIso(req.body, 'checkOutAtMs', 'checkOutAt');
 
+    const tzoRm = req.body.timeZoneOffsetMinutes ?? req.query.timeZoneOffsetMinutes;
+    const dayStartForPunch =
+      clientRange?.start
+      ?? (dayKey && isReasonableTzOffset(tzoRm)
+        ? dayRangeFromDayKeyAndTzOffset(dayKey, Number(tzoRm))?.start
+        : null);
+
+    const inTime =
+      checkInFromBody
+      || (dayStartForPunch
+        ? parseTimeFromDayStartUtc(
+          dayStartForPunch,
+          loginTime?.hh ?? '',
+          loginTime?.mm ?? '',
+          loginTime?.meridiem ?? 'AM',
+        )
+        : parseTimeForDate(
+          day,
+          loginTime?.hh ?? '',
+          loginTime?.mm ?? '',
+          loginTime?.meridiem ?? 'AM',
+        ));
+    const outTime =
+      checkOutFromBody
+      || (dayStartForPunch
+        ? parseTimeFromDayStartUtc(
+          dayStartForPunch,
+          logoutTime?.hh ?? '',
+          logoutTime?.mm ?? '',
+          logoutTime?.meridiem ?? 'PM',
+        )
+        : parseTimeForDate(
+          day,
+          logoutTime?.hh ?? '',
+          logoutTime?.mm ?? '',
+          logoutTime?.meridiem ?? 'PM',
+        ));
+
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] mark resolved times', {
+      dayKey,
+      dayStartForPunch: dayStartForPunch?.toISOString?.(),
+      checkInFromBody: checkInFromBody?.toISOString?.(),
+      checkOutFromBody: checkOutFromBody?.toISOString?.(),
+      inTime: inTime?.toISOString?.(),
+      outTime: outTime?.toISOString?.(),
+    });
+
+    item.attendanceDayKey = dayKey;
     item.dayStatus = statusNorm;
     item.note = note || '';
     if (statusNorm === 'LEAVE') {
@@ -181,13 +463,53 @@ async function markStatus(req, res, next) {
     }
     if (inTime) item.checkInAt = inTime;
     if (outTime) item.checkOutAt = outTime;
+    if (dayStartForPunch) item.attendanceDate = dayStartForPunch;
     if (item.checkInAt && item.checkOutAt) {
       item.minutesWorked = Math.max(
         0,
         Math.round((item.checkOutAt.getTime() - item.checkInAt.getTime()) / 60000),
       );
     }
-    await item.save();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await item.save();
+        break;
+      } catch (err) {
+        if (!err || err.code !== 11000 || attempt === 1) throw err;
+        item = await resolveSingleDayAttendanceDoc(companyId, userId, dayKey, day, dayEnd);
+        if (!item) throw err;
+        item.attendanceDayKey = dayKey;
+        item.dayStatus = statusNorm;
+        item.note = note || '';
+        if (statusNorm === 'LEAVE') {
+          const lk = String(leaveKind || '').toLowerCase();
+          if (lk !== 'paid' && lk !== 'unpaid') {
+            return res.status(400).json({ message: 'Leave requires leaveKind: paid or unpaid.' });
+          }
+          item.leaveKind = lk;
+        } else {
+          item.leaveKind = null;
+        }
+        if (inTime) item.checkInAt = inTime;
+        if (outTime) item.checkOutAt = outTime;
+        if (dayStartForPunch) item.attendanceDate = dayStartForPunch;
+        if (item.checkInAt && item.checkOutAt) {
+          item.minutesWorked = Math.max(
+            0,
+            Math.round((item.checkOutAt.getTime() - item.checkInAt.getTime()) / 60000),
+          );
+        }
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] mark saved', {
+      id: String(item._id),
+      checkInAt: item.checkInAt?.toISOString?.(),
+      checkOutAt: item.checkOutAt?.toISOString?.(),
+      attendanceDate: item.attendanceDate?.toISOString?.(),
+      attendanceDayKey: item.attendanceDayKey,
+      dayStatus: item.dayStatus,
+    });
     return res.json({ item });
   } catch (e) {
     return next(e);
@@ -210,16 +532,32 @@ async function bulkMarkStatus(req, res, next) {
       .map((x) => String(x))
       .filter((x) => mongoose.Types.ObjectId.isValid(x));
     if (!validIds.length) return res.status(400).json({ message: 'No valid userIds.' });
-    const day = normalizeDateOnly(date);
-    if (!day) return res.status(400).json({ message: 'Invalid date.' });
-    const dayEnd = endOfDay(day);
+    const clientRange = resolveDayRangeFromRequest({ body: req.body });
+    let day;
+    let dayEnd;
+    if (clientRange) {
+      day = clientRange.start;
+      dayEnd = clientRange.end;
+    } else {
+      day = normalizeDateOnly(date);
+      if (!day) return res.status(400).json({ message: 'Invalid date.' });
+      dayEnd = endOfDay(day);
+    }
 
-    const existing = await Attendance.find({
-      companyId,
-      userId: { $in: validIds },
-      attendanceDate: { $gte: day, $lte: dayEnd },
+    const dayKey = normalizeDayKey(date);
+    if (!dayKey) {
+      return res.status(400).json({ message: 'Invalid or missing date (expected YYYY-MM-DD).' });
+    }
+
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] POST /attendance/mark-bulk', {
+      adminId: String(req.admin?._id || ''),
+      userCount: validIds.length,
+      status: statusNorm,
+      date,
+      timeZoneOffsetMinutes: req.body.timeZoneOffsetMinutes,
+      hasDayStartISO: Boolean(req.body.dayStartISO),
     });
-    const map = new Map(existing.map((x) => [String(x.userId), x]));
 
     let leaveKindNorm;
     if (statusNorm === 'LEAVE') {
@@ -231,13 +569,18 @@ async function bulkMarkStatus(req, res, next) {
 
     const toSave = [];
     for (const uid of validIds) {
-      const item = map.get(uid) || new Attendance({
-        companyId,
-        userId: uid,
-        attendanceDate: day,
-        checkInAt: day,
-        method: 'manual',
-      });
+      let item = await resolveSingleDayAttendanceDoc(companyId, uid, dayKey, day, dayEnd);
+      if (!item) {
+        item = new Attendance({
+          companyId,
+          userId: uid,
+          attendanceDayKey: dayKey,
+          attendanceDate: day,
+          checkInAt: day,
+          method: 'manual',
+        });
+      }
+      item.attendanceDayKey = dayKey;
       item.dayStatus = statusNorm;
       if (statusNorm === 'LEAVE') {
         item.leaveKind = leaveKindNorm;
@@ -247,6 +590,8 @@ async function bulkMarkStatus(req, res, next) {
       toSave.push(item.save());
     }
     await Promise.all(toSave);
+    // eslint-disable-next-line no-console
+    console.log('[Attendance][api] mark-bulk saved', { count: validIds.length, dayKey, status: statusNorm });
     return res.json({ success: true, count: validIds.length });
   } catch (e) {
     return next(e);

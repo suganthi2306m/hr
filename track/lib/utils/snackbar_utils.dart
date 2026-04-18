@@ -17,6 +17,8 @@ class SnackBarUtils {
     IconData? leadingIcon,
     /// White card, black text/border/icon (e.g. auto visit check-in/out).
     bool lightCard = false,
+    String? actionLabel,
+    VoidCallback? onAction,
   }) {
     // Attempt to find the top-level overlay
     final overlay = Navigator.of(context, rootNavigator: true).overlay;
@@ -35,14 +37,19 @@ class SnackBarUtils {
             : (backgroundColor ?? AppColors.primary), // primary for success
         isError: isError,
         lightCard: lightCard,
+        actionLabel: actionLabel,
+        onAction: onAction,
         onDismissed: () => _removeCurrentSnackBarSync(),
       ),
     );
 
     overlay.insert(_currentEntry!);
 
-    // Auto-dismiss after [duration] or default 3 seconds
-    _timer = Timer(duration ?? const Duration(milliseconds: 3000), () {
+    final effectiveDuration = duration ??
+        ((actionLabel != null && onAction != null)
+            ? const Duration(seconds: 5)
+            : const Duration(milliseconds: 3000));
+    _timer = Timer(effectiveDuration, () {
       _removeCurrentSnackBarSync();
     });
   }
@@ -73,6 +80,8 @@ class _TopSnackBarWidget extends StatefulWidget {
   final Color backgroundColor;
   final bool isError;
   final bool lightCard;
+  final String? actionLabel;
+  final VoidCallback? onAction;
   final VoidCallback onDismissed;
 
   const _TopSnackBarWidget({
@@ -82,6 +91,8 @@ class _TopSnackBarWidget extends StatefulWidget {
     required this.backgroundColor,
     required this.isError,
     this.lightCard = false,
+    this.actionLabel,
+    this.onAction,
     required this.onDismissed,
   });
 
@@ -246,6 +257,29 @@ class _TopSnackBarWidgetState extends State<_TopSnackBarWidget>
                         ],
                       ),
                     ),
+                    if (widget.actionLabel != null &&
+                        widget.actionLabel!.isNotEmpty &&
+                        widget.onAction != null) ...[
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () {
+                          widget.onAction!();
+                          widget.onDismissed();
+                        },
+                        style: TextButton.styleFrom(
+                          foregroundColor: widget.lightCard
+                              ? Colors.black
+                              : (widget.isError ? const Color(0xFF111827) : Colors.white),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: Text(
+                          widget.actionLabel!,
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),

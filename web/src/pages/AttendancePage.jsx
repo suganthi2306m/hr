@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import apiClient from '../api/client';
+import {
+  dayContextForApi,
+  formatAttendanceClock,
+  localWallClockToEpochMs,
+  wallClockPartsFromStoredUtc,
+} from '../utils/attendanceDateTime';
 
 const STATUS = {
   PRESENT: 'Present',
@@ -33,30 +39,12 @@ function statusLineLabel(row) {
   return STATUS[s] || s;
 }
 
-function emptyTime(meridiem = 'AM') {
-  return { hh: '', mm: '', meridiem };
-}
-
 function toDateInput(d) {
   const x = new Date(d);
   const yyyy = x.getFullYear();
   const mm = `${x.getMonth() + 1}`.padStart(2, '0');
   const dd = `${x.getDate()}`.padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
-}
-
-function parseExistingTime(dateString) {
-  if (!dateString) return emptyTime('AM');
-  const d = new Date(dateString);
-  if (Number.isNaN(d.getTime())) return emptyTime('AM');
-  let hh = d.getHours();
-  const meridiem = hh >= 12 ? 'PM' : 'AM';
-  hh = hh % 12 || 12;
-  return {
-    hh: `${hh}`.padStart(2, '0'),
-    mm: `${d.getMinutes()}`.padStart(2, '0'),
-    meridiem,
-  };
 }
 
 function AttendancePage() {
@@ -71,9 +59,15 @@ function AttendancePage() {
   const [leaveModal, setLeaveModal] = useState(null);
 
   const load = useCallback(async () => {
+    const dc = dayContextForApi(date);
+    const dailyParams = {
+      date,
+      timeZoneOffsetMinutes: dc.timeZoneOffsetMinutes,
+      ...(dc.dayStartISO ? { dayStart: dc.dayStartISO, dayEnd: dc.dayEndISO } : {}),
+    };
     const [{ data: u }, { data: d }] = await Promise.all([
       apiClient.get('/users'),
-      apiClient.get('/ops/attendance/daily', { params: { date } }),
+      apiClient.get('/ops/attendance/daily', { params: dailyParams }),
     ]);
     setUsers(u.items || []);
     setDaily(d.items || []);
@@ -124,6 +118,13 @@ function AttendancePage() {
     setSelected(rows.map((x) => String(x.user._id)));
   };
 
+  const dayContext = () => dayContextForApi(date);
+
+  const logAttendance = (label, payload, extra) => {
+    // eslint-disable-next-line no-console
+    console.info('[LiveTrack][Attendance][web]', label, payload, extra ?? '');
+  };
+
   const applyBulk = async (status) => {
     if (!selected.length) return;
     if (status === 'LEAVE') {
@@ -133,14 +134,20 @@ function AttendancePage() {
     setSaving(true);
     setMsg('');
     try {
-      await apiClient.post('/ops/attendance/mark-bulk', {
+      const payload = {
         userIds: selected,
         status,
         date,
-      });
+        ...dayContext(),
+      };
+      logAttendance('POST /ops/attendance/mark-bulk', payload);
+      const { data } = await apiClient.post('/ops/attendance/mark-bulk', payload);
+      logAttendance('mark-bulk response', data);
       setMsg(`${STATUS[status]} applied for ${selected.length} staff.`);
       await load();
     } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[LiveTrack][Attendance][web] mark-bulk error', e?.response?.data ?? e?.message);
       setMsg(e?.response?.data?.message || 'Failed to update attendance.');
     } finally {
       setSaving(false);
@@ -155,14 +162,20 @@ function AttendancePage() {
     setSaving(true);
     setMsg('');
     try {
-      await apiClient.post('/ops/attendance/mark', {
+      const payload = {
         userId,
         status,
         date,
-      });
+        ...dayContext(),
+      };
+      logAttendance('POST /ops/attendance/mark', payload);
+      const { data } = await apiClient.post('/ops/attendance/mark', payload);
+      logAttendance('mark response', data);
       setMsg(`${STATUS[status]} saved.`);
       await load();
     } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[LiveTrack][Attendance][web] mark error', e?.response?.data ?? e?.message);
       setMsg(e?.response?.data?.message || 'Failed to update staff attendance.');
     } finally {
       setSaving(false);
@@ -180,6 +193,7 @@ function AttendancePage() {
           status: 'LEAVE',
           date,
           leaveKind,
+          ...dayContext(),
         });
         setMsg(`Leave (${leaveKind === 'paid' ? 'Paid' : 'Unpaid'}) applied for ${leaveModal.userIds.length} staff.`);
       } else {
@@ -188,6 +202,7 @@ function AttendancePage() {
           status: 'LEAVE',
           date,
           leaveKind,
+          ...dayContext(),
         });
         setMsg(`Leave (${leaveKind === 'paid' ? 'Paid' : 'Unpaid'}) saved.`);
       }
@@ -205,8 +220,8 @@ function AttendancePage() {
     setTimingModal({
       userId: String(row.user._id),
       name: row.user.name || 'Staff',
-      loginTime: parseExistingTime(a?.checkInAt),
-      logoutTime: parseExistingTime(a?.checkOutAt),
+      loginTime: wallClockPartsFromStoredUtc(a?.checkInAt),
+      logoutTime: wallClockPartsFromStoredUtc(a?.checkOutAt),
     });
   };
 
@@ -215,17 +230,31 @@ function AttendancePage() {
     setSaving(true);
     setMsg('');
     try {
-      await apiClient.post('/ops/attendance/mark', {
+      const checkInAtMs = localWallClockToEpochMs(date, timingModal.loginTime);
+      const checkOutAtMs = localWallClockToEpochMs(date, timingModal.logoutTime);
+      const checkInAt = checkInAtMs != null ? new Date(checkInAtMs).toISOString() : null;
+      const checkOutAt = checkOutAtMs != null ? new Date(checkOutAtMs).toISOString() : null;
+      const payload = {
         userId: timingModal.userId,
         status: 'PRESENT',
         date,
         loginTime: timingModal.loginTime,
         logoutTime: timingModal.logoutTime,
+        ...(checkInAtMs != null ? { checkInAtMs, checkInAt } : {}),
+        ...(checkOutAtMs != null ? { checkOutAtMs, checkOutAt } : {}),
+        ...dayContext(),
+      };
+      logAttendance('POST /ops/attendance/mark (timing modal)', payload, {
+        localPreview: { checkInAt, checkOutAt, checkInAtMs, checkOutAtMs },
       });
+      const { data } = await apiClient.post('/ops/attendance/mark', payload);
+      logAttendance('mark timing response', data);
       setTimingModal(null);
       setMsg('Timing saved.');
       await load();
     } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[LiveTrack][Attendance][web] mark timing error', e?.response?.data ?? e?.message);
       setMsg(e?.response?.data?.message || 'Failed to save timing.');
     } finally {
       setSaving(false);
@@ -300,8 +329,8 @@ function AttendancePage() {
                       {user.employeeId || user.empId || user.code || '—'} &nbsp;·&nbsp; {user.role || 'Staff'}
                     </div>
                     <div className="text-xs text-slate-600">
-                      {attendance?.checkInAt ? `In ${new Date(attendance.checkInAt).toLocaleTimeString()}` : 'No punch record'}
-                      {attendance?.checkOutAt ? ` · Out ${new Date(attendance.checkOutAt).toLocaleTimeString()}` : ''}
+                      {attendance?.checkInAt ? `In ${formatAttendanceClock(attendance.checkInAt)}` : 'No punch record'}
+                      {attendance?.checkOutAt ? ` · Out ${formatAttendanceClock(attendance.checkOutAt)}` : ''}
                     </div>
                     <div className="text-xs font-semibold text-amber-700">
                       Status: {statusLineLabel(row)}

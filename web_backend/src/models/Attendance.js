@@ -15,6 +15,8 @@ const attendanceSchema = new mongoose.Schema(
     lateFlag: { type: Boolean, default: false },
     earlyExitFlag: { type: Boolean, default: false },
     attendanceDate: { type: Date, index: true },
+    /** Calendar day for this row (YYYY-MM-DD from supervisor UI); one document per user per key. */
+    attendanceDayKey: { type: String, index: true },
     dayStatus: {
       type: String,
       enum: ['PRESENT', 'ABSENT', 'LEAVE', 'HOLIDAY'],
@@ -26,6 +28,14 @@ const attendanceSchema = new mongoose.Schema(
     note: { type: String },
   },
   { timestamps: true },
+);
+
+attendanceSchema.index(
+  { companyId: 1, userId: 1, attendanceDayKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { attendanceDayKey: { $exists: true, $type: 'string' } },
+  },
 );
 
 module.exports = mongoose.model('Attendance', attendanceSchema);

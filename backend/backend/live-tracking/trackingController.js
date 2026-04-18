@@ -84,12 +84,35 @@ function endOfLocalDay(d = new Date()) {
   return x;
 }
 
-/** Attendance row has a real punch-in (mobile `checkInTime` or legacy `punchIn`). */
+/** Attendance row has a real punch-in (mobile `checkInTime`, web `checkInAt`, or legacy `punchIn`). */
 function hasRealCheckInClause() {
   return {
     $or: [
       { checkInTime: { $exists: true, $ne: null } },
+      { checkInAt: { $exists: true, $ne: null } },
       { punchIn: { $exists: true, $ne: null } },
+    ],
+  };
+}
+
+/** Open session: no mobile checkout and no web checkout (same collection may hold either schema). */
+function noCheckoutClause() {
+  return {
+    $and: [
+      {
+        $or: [
+          { checkOutTime: null },
+          { checkOutTime: { $exists: false } },
+          { checkOutTime: '' },
+        ],
+      },
+      {
+        $or: [
+          { checkOutAt: null },
+          { checkOutAt: { $exists: false } },
+          { checkOutAt: '' },
+        ],
+      },
     ],
   };
 }
@@ -102,20 +125,14 @@ function staffOwnsAttendanceRow(uidClause) {
 
 function openSessionAndCheckInQuery(uidClause) {
   return {
-    $and: [
-      staffOwnsAttendanceRow(uidClause),
-      {
-        $or: [{ checkOutTime: null }, { checkOutTime: { $exists: false } }],
-      },
-      hasRealCheckInClause(),
-    ],
+    $and: [staffOwnsAttendanceRow(uidClause), noCheckoutClause(), hasRealCheckInClause()],
   };
 }
 
 /** Normalize punch-in for validation (handles Date, ISO string, legacy). */
 function resolvePunchInMs(att) {
   if (!att || typeof att !== 'object') return null;
-  const raw = att.checkInTime ?? att.punchIn;
+  const raw = att.checkInTime ?? att.checkInAt ?? att.punchIn;
   if (raw == null || raw === '') return null;
   if (raw instanceof Date) {
     const t = raw.getTime();
@@ -439,8 +456,9 @@ async function computePresenceStatusForOffice(lat, lng, branchId, accuracyM = 0)
 
 /**
  * Validate today's attendance for presence tracking.
- * Track ONLY IF: check-in exists AND check-out does NOT exist AND leaveType is null/empty/not present.
- * Supports `backend/src/models/Attendance.js` (userId, checkInTime, checkOutTime) and legacy punch schemas.
+ * Track ONLY IF: check-in exists AND check-out does NOT exist AND not on leave.
+ * Supports mobile attendance (checkInTime/checkOutTime), web attendance (checkInAt/checkOutAt, dayStatus),
+ * and legacy punch schemas.
  */
 async function validateAttendanceForPresence(staffId) {
   if (!Attendance) {
@@ -454,7 +472,7 @@ async function validateAttendanceForPresence(staffId) {
 
   // Mobile app attendances (attendanceController): userId or legacy `user`, open session, must have check-in time.
   let attendance = await Attendance.findOne(openSessionAndCheckInQuery(uidClause))
-    .sort({ checkInTime: -1, punchIn: -1 })
+    .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
     .lean();
 
   // Same calendar day (server local).
@@ -465,13 +483,27 @@ async function validateAttendanceForPresence(staffId) {
       $and: [
         staffOwnsAttendanceRow(uidClause),
         { checkInTime: { $gte: dayStart, $lte: dayEnd } },
-        {
-          $or: [{ checkOutTime: null }, { checkOutTime: { $exists: false } }],
-        },
+        noCheckoutClause(),
         hasRealCheckInClause(),
       ],
     })
-      .sort({ checkInTime: -1, punchIn: -1 })
+      .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
+      .lean();
+  }
+
+  // Web/admin rows often have checkInAt only (no checkInTime).
+  if (!attendance) {
+    const dayStart = startOfLocalDay(new Date());
+    const dayEnd = endOfLocalDay(new Date());
+    attendance = await Attendance.findOne({
+      $and: [
+        staffOwnsAttendanceRow(uidClause),
+        { checkInAt: { $gte: dayStart, $lte: dayEnd } },
+        noCheckoutClause(),
+        hasRealCheckInClause(),
+      ],
+    })
+      .sort({ checkInAt: -1, checkInTime: -1, punchIn: -1 })
       .lean();
   }
 
@@ -482,13 +514,11 @@ async function validateAttendanceForPresence(staffId) {
       $and: [
         staffOwnsAttendanceRow(uidClause),
         { attendanceDate: { $gte: dayStart, $lte: dayEnd } },
-        {
-          $or: [{ checkOutTime: null }, { checkOutTime: { $exists: false } }],
-        },
+        noCheckoutClause(),
         hasRealCheckInClause(),
       ],
     })
-      .sort({ checkInTime: -1, punchIn: -1 })
+      .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
       .lean();
   }
 
@@ -540,8 +570,10 @@ async function validateAttendanceForPresence(staffId) {
   if (!attendance) return { canTrack: false, reason: 'no_attendance' };
 
   const punchInMs = resolvePunchInMs(attendance);
-  const punchOut = attendance.checkOutTime ?? attendance.punchOut;
+  const punchOut = attendance.checkOutTime ?? attendance.punchOut ?? attendance.checkOutAt;
   const leaveType = attendance.leaveType;
+  const leaveKind = attendance.leaveKind;
+  const dayStatus = attendance.dayStatus;
 
   if (punchInMs == null) return { canTrack: false, reason: 'no_attendance' };
   if (punchOut != null && punchOut !== '') {
@@ -551,6 +583,8 @@ async function validateAttendanceForPresence(staffId) {
     }
   }
   if (leaveType != null && String(leaveType).trim() !== '') return { canTrack: false, reason: 'on_leave' };
+  if (leaveKind != null && String(leaveKind).trim() !== '') return { canTrack: false, reason: 'on_leave' };
+  if (String(dayStatus || '').toUpperCase() === 'LEAVE') return { canTrack: false, reason: 'on_leave' };
 
   return { canTrack: true };
 }

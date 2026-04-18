@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GoogleMap, InfoWindow, Marker, Polyline } from '@react-google-maps/api';
 import { io } from 'socket.io-client';
 import dayjs from 'dayjs';
-import apiClient from '../api/client';
+import apiClient, { SOCKET_BASE_URL } from '../api/client';
 import { LiveTrackWordmark } from '../components/brand/LiveTrackWordmark';
 import UiSelect from '../components/common/UiSelect';
 import { useGoogleMaps } from '../context/GoogleMapsContext';
@@ -10,9 +10,7 @@ import { FLUX_PRIMARY, FLUX_ROUTE_GOLD, fluxCircleMarkerIcon, getFluxMapOptions 
 
 const mapContainerStyle = { width: '100%', height: '65vh' };
 const defaultCenter = { lat: 20.5937, lng: 78.9629 };
-const SOCKET_URL =
-  (import.meta.env.VITE_SOCKET_URL || '').trim() ||
-  (import.meta.env.DEV ? 'http://localhost:5000' : '');
+const SOCKET_URL = SOCKET_BASE_URL;
 /** Avoid fitBounds zooming to max when there is only one point (grey “blank” map). */
 const SINGLE_POINT_ZOOM = 11;
 const MAX_ZOOM_AFTER_FIT = 14;

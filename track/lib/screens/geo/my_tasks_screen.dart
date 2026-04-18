@@ -39,12 +39,6 @@ class MyTasksScreen extends StatefulWidget {
 
 class _MyTasksScreenState extends State<MyTasksScreen>
     with WidgetsBindingObserver, RouteAware {
-  /// Set to `false` to re-enable the play button on hold tasks (opens detail / arrived for resume ride).
-  static const bool _clientPreviewDisableResumeRideFromTaskList = true;
-
-  /// Set to `false` to re-enable the app bar + add task control.
-  static const bool _clientPreviewDisableAddTaskButton = true;
-
   String? _loggedInUserId;
   List<Task> _tasks = [];
   bool _isLoading = true;
@@ -578,24 +572,21 @@ class _MyTasksScreenState extends State<MyTasksScreen>
                     ),
                   ),
                   if (_loggedInUserId != null && _loggedInUserId!.isNotEmpty)
-                    AbsorbPointer(
-                      absorbing: _clientPreviewDisableAddTaskButton,
-                      child: IconButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  AddTaskScreen(userId: _loggedInUserId!),
-                            ),
-                          ).then((_) => _fetchTasks());
-                        },
-                        icon: Icon(
-                          Icons.add_circle_outline,
-                          color: Colors.black.withValues(alpha: 0.82),
-                        ),
-                        tooltip: 'Add task',
+                    IconButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                AddTaskScreen(userId: _loggedInUserId!),
+                          ),
+                        ).then((_) => _fetchTasks());
+                      },
+                      icon: Icon(
+                        Icons.add_circle_outline,
+                        color: Colors.black.withValues(alpha: 0.82),
                       ),
+                      tooltip: 'Add task',
                     ),
                   IconButton(
                     onPressed: _openTaskFiltersBottomSheet,
@@ -1294,16 +1285,8 @@ class _MyTasksScreenState extends State<MyTasksScreen>
                                                   child: InkWell(
                                                     customBorder:
                                                         const CircleBorder(),
-                                                    // Client preview: resume ride — was:
-                                                    // onTap: () => _openTaskFromList(task),
-                                                    // (_openTaskFromList → TaskDetailScreen / ArrivedScreen / CompletedTaskDetailScreen)
-                                                    onTap:
-                                                        _clientPreviewDisableResumeRideFromTaskList
-                                                            ? null
-                                                            : () =>
-                                                                _openTaskFromList(
-                                                                  task,
-                                                                ),
+                                                    onTap: () =>
+                                                        _openTaskFromList(task),
                                                     child: const Padding(
                                                       padding: EdgeInsets.all(10),
                                                       child: Icon(

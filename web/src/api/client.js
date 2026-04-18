@@ -1,11 +1,47 @@
 import axios from 'axios';
 
-/** Vite inlines VITE_* at build time — set in Vercel and redeploy (clear cache if needed). */
-const fromEnv = (import.meta.env.VITE_API_BASE_URL || '').trim();
-export const API_BASE_URL =
-  fromEnv || (import.meta.env.DEV ? 'http://localhost:5000/api' : '');
+function trimEnv(key) {
+  return String(import.meta.env[key] ?? '').trim();
+}
 
-if (import.meta.env.PROD && !fromEnv) {
+function wantsRemoteApiInDev() {
+  const v = trimEnv('VITE_DEV_USE_REMOTE_API').toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+function isLoopbackApiUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return /localhost|127\.0\.0\.1/i.test(url);
+}
+
+/**
+ * Vite inlines VITE_* at build time (Vercel / Render).
+ * In `npm run dev`, we default to **localhost** so a production URL in `.env`
+ * does not send local traffic to Render. Set `VITE_DEV_USE_REMOTE_API=1` to
+ * keep using `VITE_API_BASE_URL` from .env while on localhost.
+ */
+const fromEnv = trimEnv('VITE_API_BASE_URL').replace(/\/$/, '');
+export const API_BASE_URL = (() => {
+  if (import.meta.env.DEV) {
+    if (wantsRemoteApiInDev() && fromEnv) return fromEnv;
+    if (fromEnv && isLoopbackApiUrl(fromEnv)) return fromEnv;
+    return 'http://localhost:5000/api';
+  }
+  return fromEnv || '';
+})();
+
+/** Socket.io origin (no `/api`). Same dev vs remote rules as API_BASE_URL. */
+export const SOCKET_BASE_URL = (() => {
+  const raw = trimEnv('VITE_SOCKET_URL').replace(/\/$/, '');
+  if (import.meta.env.DEV) {
+    if (wantsRemoteApiInDev() && raw) return raw;
+    if (raw && isLoopbackApiUrl(raw)) return raw;
+    return 'http://localhost:5000';
+  }
+  return raw || '';
+})();
+
+if (import.meta.env.PROD && !API_BASE_URL) {
   // eslint-disable-next-line no-console
   console.error(
     '[LiveTrack] VITE_API_BASE_URL is missing at build time. Add it in Vercel → Settings → Environment Variables, then Redeploy (use "Clear cache and redeploy" if it still fails).',
@@ -15,11 +51,6 @@ if (import.meta.env.PROD && !fromEnv) {
 export const API_BASE_URL_STORAGE_KEY = 'livetrack_api_base_url';
 
 export const TOKEN_KEY = 'livetrack_admin_token';
-
-function isLoopbackApiUrl(url) {
-  if (!url || typeof url !== 'string') return false;
-  return /localhost|127\.0\.0\.1/i.test(url);
-}
 
 /** In production, never reuse old dev URLs from this key (they cause many failed OPTIONS to localhost). */
 if (import.meta.env.PROD) {

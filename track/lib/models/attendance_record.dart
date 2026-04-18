@@ -50,12 +50,15 @@ class AttendanceRecord {
   final String status;
 
   factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
+    final checkIn = DateDisplayUtil.parseFromApiAsLocal(json['checkInTime']) ??
+        DateDisplayUtil.parseFromApiAsLocal(json['checkInAt']);
+    final checkOut = DateDisplayUtil.parseFromApiAsLocal(json['checkOutTime']) ??
+        DateDisplayUtil.parseFromApiAsLocal(json['checkOutAt']);
     return AttendanceRecord(
       id: json['_id']?.toString() ?? '',
       attendanceDate: DateDisplayUtil.parseFromApiAsLocal(json['attendanceDate']),
-      checkInTime:
-          DateDisplayUtil.parseFromApiAsLocal(json['checkInTime']) ?? DateTime.now(),
-      checkOutTime: DateDisplayUtil.parseFromApiAsLocal(json['checkOutTime']),
+      checkInTime: checkIn ?? DateTime.now(),
+      checkOutTime: checkOut,
       checkInImageUrl: json['checkInImageUrl']?.toString(),
       checkOutImageUrl: json['checkOutImageUrl']?.toString(),
       checkInLocation: json['checkInLocation'] is Map<String, dynamic>
@@ -67,7 +70,9 @@ class AttendanceRecord {
             )
           : null,
       durationMinutes: (json['duration'] as num?)?.round() ?? 0,
-      status: json['status']?.toString() ?? 'PENDING',
+      status: json['status']?.toString() ??
+          json['dayStatus']?.toString() ??
+          'PENDING',
     );
   }
 }

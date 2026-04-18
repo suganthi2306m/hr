@@ -92,9 +92,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  /// Set to `false` when the client build should allow menu, shortcuts, check-in/out, new customer, and attendance.
-  static const bool _clientPreviewBlockShortcutsAndCheckIn = true;
-
   static const Color _bg = Colors.white;
   static const Color _card = Colors.white;
   static const Color _ink = Color(0xFF1A1A1A);
@@ -309,19 +306,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       rightTrailing = ConstrainedBox(
         constraints: const BoxConstraints(minWidth: 112, maxWidth: 132),
-        child: AbsorbPointer(
-          absorbing: _clientPreviewBlockShortcutsAndCheckIn,
-          child: FilledButton.icon(
-            onPressed: () => _runAttendanceCamera(context, checkout: true),
-            icon: const Icon(Icons.logout_rounded, size: 20),
-            label: const Text('Check out'),
-            style: FilledButton.styleFrom(
-              backgroundColor: _ink,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              textStyle:
-                  const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
-            ),
+        child: FilledButton.icon(
+          onPressed: () => _runAttendanceCamera(context, checkout: true),
+          icon: const Icon(Icons.logout_rounded, size: 20),
+          label: const Text('Check out'),
+          style: FilledButton.styleFrom(
+            backgroundColor: _ink,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            textStyle:
+                const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
           ),
         ),
       );
@@ -385,9 +379,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       rightTrailing = ConstrainedBox(
         constraints: const BoxConstraints(minWidth: 112, maxWidth: 132),
         child: FilledButton.icon(
-          onPressed: _clientPreviewBlockShortcutsAndCheckIn
-              ? null
-              : () => _runAttendanceCamera(context, checkout: false),
+          onPressed: () => _runAttendanceCamera(context, checkout: false),
           icon: const Icon(Icons.login_rounded, size: 20),
           label: const Text('Check in'),
           style: FilledButton.styleFrom(
@@ -532,7 +524,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _circleIconButton({
     required IconData icon,
-    required VoidCallback? onPressed,
+    required VoidCallback onPressed,
     String? tooltip,
   }) {
     final child = Material(
@@ -739,7 +731,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       shape: const CircleBorder(),
       child: InkWell(
         customBorder: const CircleBorder(),
-        onTap: _clientPreviewBlockShortcutsAndCheckIn ? null : onTap,
+        onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: iconWidget ??
@@ -766,9 +758,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _circleIconButton(
           icon: Icons.menu_rounded,
           tooltip: 'Menu',
-          onPressed: _clientPreviewBlockShortcutsAndCheckIn
-              ? null
-              : () => _openAppMenu(context),
+          onPressed: () => _openAppMenu(context),
         ),
         const SizedBox(width: 10),
         Material(
@@ -1017,54 +1007,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      AbsorbPointer(
-                        absorbing: _clientPreviewBlockShortcutsAndCheckIn,
-                        child: OutlinedButton.icon(
-                          onPressed: () => _openCreateCustomer(context),
-                          icon: Icon(
-                            Icons.person_add_alt_1_rounded,
-                            color: AppColors.primary,
+                      OutlinedButton.icon(
+                        onPressed: () => _openCreateCustomer(context),
+                        icon: Icon(
+                          Icons.person_add_alt_1_rounded,
+                          color: AppColors.primary,
+                        ),
+                        label: Text(
+                          'New customer',
+                          style: TextStyle(
+                            color: _ink,
+                            fontWeight: FontWeight.w700,
                           ),
-                          label: Text(
-                            'New customer',
-                            style: TextStyle(
-                              color: _ink,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: AppColors.primary.withValues(alpha: 0.7)),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: AppColors.primary.withValues(alpha: 0.7)),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
                           ),
                         ),
                       ),
                       const SizedBox(height: 12),
-                      AbsorbPointer(
-                        absorbing: _clientPreviewBlockShortcutsAndCheckIn,
-                        child: OutlinedButton.icon(
-                          onPressed: () => _openAttendance(context),
-                          icon: Icon(
-                            Icons.verified_user_rounded,
-                            color: _ink.withValues(alpha: 0.85),
+                      OutlinedButton.icon(
+                        onPressed: () => _openAttendance(context),
+                        icon: Icon(
+                          Icons.verified_user_rounded,
+                          color: _ink.withValues(alpha: 0.85),
+                        ),
+                        label: Text(
+                          'Attendance & Leave',
+                          style: TextStyle(
+                            color: _ink.withValues(alpha: 0.9),
+                            fontWeight: FontWeight.w700,
                           ),
-                          label: Text(
-                            'Attendance & Leave',
-                            style: TextStyle(
-                              color: _ink.withValues(alpha: 0.9),
-                              fontWeight: FontWeight.w700,
-                            ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                            color: _ink.withValues(alpha: 0.2),
                           ),
-                          style: OutlinedButton.styleFrom(
-                            side: BorderSide(
-                              color: _ink.withValues(alpha: 0.2),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
                           ),
                         ),
                       ),

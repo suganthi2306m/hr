@@ -41,6 +41,38 @@ function statusFromDuration(minutes) {
   return 'PENDING';
 }
 
+/** Open session: no mobile checkout and no web checkout. */
+function noOpenCheckoutClause() {
+  return {
+    $and: [
+      {
+        $or: [
+          { checkOutTime: null },
+          { checkOutTime: { $exists: false } },
+          { checkOutTime: '' },
+        ],
+      },
+      {
+        $or: [
+          { checkOutAt: null },
+          { checkOutAt: { $exists: false } },
+          { checkOutAt: '' },
+        ],
+      },
+    ],
+  };
+}
+
+/** Resolve punch-in instant for duration (mobile checkInTime, web checkInAt, legacy punchIn). */
+function resolveCheckInDate(att) {
+  if (!att || typeof att !== 'object') return null;
+  const raw = att.checkInTime ?? att.checkInAt ?? att.punchIn;
+  if (raw == null || raw === '') return null;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  const t = d.getTime();
+  return Number.isFinite(t) && t > 0 ? d : null;
+}
+
 /** Cloudinary `https://...` only — attendance selfies are not stored on disk long-term. */
 function attendanceStorageError(message, code, httpStatus = 503) {
   const e = new Error(message);
@@ -104,13 +136,17 @@ exports.checkIn = async (req, res) => {
       Attendance.findOne({
         userId: user._id,
         companyId: user.companyId,
-        checkOutTime: null,
-      }).sort({ checkInTime: -1 }),
+        ...noOpenCheckoutClause(),
+      })
+        .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
+        .lean(),
       Attendance.findOne({
         userId: user._id,
         companyId: user.companyId,
         attendanceDate: { $gte: dayStart, $lte: dayEnd },
-      }).sort({ checkInTime: -1 }),
+      })
+        .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
+        .lean(),
     ]);
 
     if (approvedLeave) {
@@ -126,7 +162,7 @@ exports.checkIn = async (req, res) => {
         message: 'Already checked in. Please check out first.',
       });
     }
-    if (todayRecord?.checkInTime) {
+    if (todayRecord && (todayRecord.checkInTime || todayRecord.checkInAt)) {
       return res.status(400).json({
         success: false,
         message: 'Attendance is already marked for today.',
@@ -268,8 +304,10 @@ exports.checkOut = async (req, res) => {
     const attendance = await Attendance.findOne({
       userId: user._id,
       companyId: user.companyId,
-      checkOutTime: null,
-    }).sort({ checkInTime: -1 });
+      ...noOpenCheckoutClause(),
+    })
+      .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
+      .lean();
     if (!attendance) {
       return res.status(400).json({
         success: false,
@@ -277,36 +315,56 @@ exports.checkOut = async (req, res) => {
       });
     }
 
+    const checkInDate = resolveCheckInDate(attendance);
+    if (!checkInDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Attendance record has no check-in time; cannot check out.',
+      });
+    }
+
     const checkOutTime = new Date();
     const durationMinutes = Math.max(
       0,
-      Math.round((checkOutTime.getTime() - attendance.checkInTime.getTime()) / 60000),
+      Math.round((checkOutTime.getTime() - checkInDate.getTime()) / 60000),
     );
 
     const checkOutImageUrl = await resolveAttendanceSelfieUrl(req.file, user, 'checkout');
     const addressOut = normalizeStoredAddress(req.body.address);
-    attendance.checkOutTime = checkOutTime;
-    attendance.checkOutImageUrl = checkOutImageUrl;
-    attendance.checkOutLocation = {
-      lat,
-      lng,
-      address: addressOut,
-      accuracy: Number.isFinite(Number(req.body.accuracy))
-        ? Number(req.body.accuracy)
-        : undefined,
-      isMocked: false,
+    const attendanceDate =
+      attendance.attendanceDate != null
+        ? attendance.attendanceDate
+        : startOfDay(checkInDate);
+    const status = statusFromDuration(durationMinutes);
+
+    const update = {
+      checkOutTime,
+      checkOutAt: checkOutTime,
+      checkOutImageUrl,
+      checkOutLocation: {
+        lat,
+        lng,
+        address: addressOut,
+        accuracy: Number.isFinite(Number(req.body.accuracy))
+          ? Number(req.body.accuracy)
+          : undefined,
+        isMocked: false,
+      },
+      attendanceDate,
+      duration: durationMinutes,
+      status,
     };
-    if (!attendance.attendanceDate) {
-      attendance.attendanceDate = startOfDay(attendance.checkInTime);
-    }
-    attendance.duration = durationMinutes;
-    attendance.status = statusFromDuration(durationMinutes);
-    await attendance.save();
+
+    const saved = await Attendance.findByIdAndUpdate(
+      attendance._id,
+      { $set: update },
+      { new: true, runValidators: false },
+    ).lean();
 
     return res.json({
       success: true,
       message: 'Checked out successfully',
-      attendance,
+      attendance: saved,
     });
   } catch (error) {
     if (error.attendanceHttpStatus) {
