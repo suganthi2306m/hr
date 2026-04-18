@@ -60,6 +60,37 @@ function utcCalendarDayBoundsFromYmd(dayStr) {
   };
 }
 
+/**
+ * Same sign as Dart `DateTime.timeZoneOffset.inMinutes` (e.g. IST +330).
+ * When present on list queries, filters use `checkInTime` for the civil day so rows
+ * match what the UI shows in local time (fixes legacy `visitDate` stored in UTC).
+ */
+function readFilterTzOffsetFromQuery(query) {
+  if (!query || typeof query !== 'object') return null;
+  const raw = query.filterTimeZoneOffsetMinutes ?? query.filterTimezoneOffsetMinutes;
+  if (raw === undefined || raw === null) return null;
+  const s = Array.isArray(raw) ? raw[0] : raw;
+  if (s === '') return null;
+  const n = typeof s === 'string' ? parseInt(s, 10) : Number(s);
+  if (!Number.isFinite(n) || n < -840 || n > 840) return null;
+  return n;
+}
+
+/** Inclusive UTC instant range for civil calendar day `YYYY-MM-DD` in that offset. */
+function checkInTimeBoundsForCivilYmd(dayStr, offsetMinutes) {
+  const s = String(dayStr || '').trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const y = parseInt(m[1], 10);
+  const mo = parseInt(m[2], 10) - 1;
+  const d = parseInt(m[3], 10);
+  const off = offsetMinutes * 60 * 1000;
+  return {
+    $gte: new Date(Date.UTC(y, mo, d, 0, 0, 0, 0) - off),
+    $lte: new Date(Date.UTC(y, mo, d, 23, 59, 59, 999) - off),
+  };
+}
+
 function extractObjectId(value) {
   if (!value) return null;
   if (typeof value === 'string') return value;
@@ -370,7 +401,8 @@ function shapeVisitDocForClient(doc) {
 
 /**
  * GET /api/company-visits
- * Query: date=YYYY-MM-DD (filters by visitDate that calendar day), status=open|completed (optional)
+ * Query: date=YYYY-MM-DD, status=open|completed (optional),
+ * filterTimeZoneOffsetMinutes (optional; same sign as Dart offset — when set, `date` filters `checkInTime` by civil day)
  */
 exports.listMine = async (req, res) => {
   try {
@@ -383,10 +415,46 @@ exports.listMine = async (req, res) => {
     if (st === 'open' || st === 'completed') {
       q.status = st;
     }
+    const customerIdStr = String(req.query.customerId || '').trim();
+    if (customerIdStr && mongoose.Types.ObjectId.isValid(customerIdStr) && customerIdStr.length === 24) {
+      q.customerId = new mongoose.Types.ObjectId(customerIdStr);
+    }
+    const tzOff = readFilterTzOffsetFromQuery(req.query);
     const dayStr = req.query.date != null ? String(req.query.date).trim() : '';
+    const fromStr = req.query.dateFrom != null ? String(req.query.dateFrom).trim() : '';
+    const toStr = req.query.dateTo != null ? String(req.query.dateTo).trim() : '';
     if (dayStr.length > 0) {
-      const bounds = utcCalendarDayBoundsFromYmd(dayStr);
-      if (bounds) q.visitDate = bounds;
+      if (tzOff != null) {
+        const b = checkInTimeBoundsForCivilYmd(dayStr, tzOff);
+        if (b) q.checkInTime = b;
+      } else {
+        const bounds = utcCalendarDayBoundsFromYmd(dayStr);
+        if (bounds) q.visitDate = bounds;
+      }
+    } else if (fromStr || toStr) {
+      if (tzOff != null) {
+        const range = {};
+        if (fromStr) {
+          const b = checkInTimeBoundsForCivilYmd(fromStr, tzOff);
+          if (b) range.$gte = b.$gte;
+        }
+        if (toStr) {
+          const b = checkInTimeBoundsForCivilYmd(toStr, tzOff);
+          if (b) range.$lte = b.$lte;
+        }
+        if (Object.keys(range).length) q.checkInTime = range;
+      } else {
+        const range = {};
+        if (fromStr) {
+          const b = utcCalendarDayBoundsFromYmd(fromStr);
+          if (b) range.$gte = b.$gte;
+        }
+        if (toStr) {
+          const b = utcCalendarDayBoundsFromYmd(toStr);
+          if (b) range.$lte = b.$lte;
+        }
+        if (Object.keys(range).length) q.visitDate = range;
+      }
     }
     const raw = await CompanyVisit.find(q)
       .sort({ checkInTime: -1 })
@@ -472,24 +540,43 @@ exports.listCompanyVisitsForOps = async (req, res) => {
       filter.status = st;
     }
 
+    const tzOff = readFilterTzOffsetFromQuery(req.query);
     const singleDay = req.query.date != null ? String(req.query.date).trim() : '';
     if (singleDay) {
-      const bounds = parseDayBounds(singleDay);
-      if (bounds) filter.visitDate = bounds;
+      if (tzOff != null) {
+        const b = checkInTimeBoundsForCivilYmd(singleDay, tzOff);
+        if (b) filter.checkInTime = b;
+      } else {
+        const bounds = parseDayBounds(singleDay);
+        if (bounds) filter.visitDate = bounds;
+      }
     } else {
       const fromStr = req.query.dateFrom != null ? String(req.query.dateFrom).trim() : '';
       const toStr = req.query.dateTo != null ? String(req.query.dateTo).trim() : '';
       if (fromStr || toStr) {
-        const range = {};
-        if (fromStr) {
-          const b = parseDayBounds(fromStr);
-          if (b) range.$gte = b.$gte;
+        if (tzOff != null) {
+          const range = {};
+          if (fromStr) {
+            const b = checkInTimeBoundsForCivilYmd(fromStr, tzOff);
+            if (b) range.$gte = b.$gte;
+          }
+          if (toStr) {
+            const b = checkInTimeBoundsForCivilYmd(toStr, tzOff);
+            if (b) range.$lte = b.$lte;
+          }
+          if (Object.keys(range).length) filter.checkInTime = range;
+        } else {
+          const range = {};
+          if (fromStr) {
+            const b = parseDayBounds(fromStr);
+            if (b) range.$gte = b.$gte;
+          }
+          if (toStr) {
+            const b = parseDayBounds(toStr);
+            if (b) range.$lte = b.$lte;
+          }
+          if (Object.keys(range).length) filter.visitDate = range;
         }
-        if (toStr) {
-          const b = parseDayBounds(toStr);
-          if (b) range.$lte = b.$lte;
-        }
-        if (Object.keys(range).length) filter.visitDate = range;
       }
     }
 

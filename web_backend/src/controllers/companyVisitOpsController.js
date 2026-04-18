@@ -28,6 +28,32 @@ function utcCalendarDayBoundsFromYmd(dayStr) {
   };
 }
 
+/** Same sign as Dart `DateTime.timeZoneOffset.inMinutes`. When set, date filters apply to `checkInTime`. */
+function readFilterTzOffsetFromQuery(query) {
+  if (!query || typeof query !== 'object') return null;
+  const raw = query.filterTimeZoneOffsetMinutes ?? query.filterTimezoneOffsetMinutes;
+  if (raw === undefined || raw === null) return null;
+  const s = Array.isArray(raw) ? raw[0] : raw;
+  if (s === '') return null;
+  const n = typeof s === 'string' ? parseInt(s, 10) : Number(s);
+  if (!Number.isFinite(n) || n < -840 || n > 840) return null;
+  return n;
+}
+
+function checkInTimeBoundsForCivilYmd(dayStr, offsetMinutes) {
+  const s = String(dayStr || '').trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const y = parseInt(m[1], 10);
+  const mo = parseInt(m[2], 10) - 1;
+  const d = parseInt(m[3], 10);
+  const off = offsetMinutes * 60 * 1000;
+  return {
+    $gte: new Date(Date.UTC(y, mo, d, 0, 0, 0, 0) - off),
+    $lte: new Date(Date.UTC(y, mo, d, 23, 59, 59, 999) - off),
+  };
+}
+
 function escapeRegex(str) {
   return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -105,24 +131,43 @@ async function listCompanyVisitsForOps(req, res) {
       filter.status = st;
     }
 
+    const tzOff = readFilterTzOffsetFromQuery(req.query);
     const singleDay = req.query.date != null ? String(req.query.date).trim() : '';
     if (singleDay) {
-      const bounds = parseDayBounds(singleDay);
-      if (bounds) filter.visitDate = bounds;
+      if (tzOff != null) {
+        const b = checkInTimeBoundsForCivilYmd(singleDay, tzOff);
+        if (b) filter.checkInTime = b;
+      } else {
+        const bounds = parseDayBounds(singleDay);
+        if (bounds) filter.visitDate = bounds;
+      }
     } else {
       const fromStr = req.query.dateFrom != null ? String(req.query.dateFrom).trim() : '';
       const toStr = req.query.dateTo != null ? String(req.query.dateTo).trim() : '';
       if (fromStr || toStr) {
-        const range = {};
-        if (fromStr) {
-          const b = parseDayBounds(fromStr);
-          if (b) range.$gte = b.$gte;
+        if (tzOff != null) {
+          const range = {};
+          if (fromStr) {
+            const b = checkInTimeBoundsForCivilYmd(fromStr, tzOff);
+            if (b) range.$gte = b.$gte;
+          }
+          if (toStr) {
+            const b = checkInTimeBoundsForCivilYmd(toStr, tzOff);
+            if (b) range.$lte = b.$lte;
+          }
+          if (Object.keys(range).length) filter.checkInTime = range;
+        } else {
+          const range = {};
+          if (fromStr) {
+            const b = parseDayBounds(fromStr);
+            if (b) range.$gte = b.$gte;
+          }
+          if (toStr) {
+            const b = parseDayBounds(toStr);
+            if (b) range.$lte = b.$lte;
+          }
+          if (Object.keys(range).length) filter.visitDate = range;
         }
-        if (toStr) {
-          const b = parseDayBounds(toStr);
-          if (b) range.$lte = b.$lte;
-        }
-        if (Object.keys(range).length) filter.visitDate = range;
       }
     }
 

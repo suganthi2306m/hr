@@ -109,6 +109,9 @@ function VisitsPage() {
         if (status) params.status = status;
         if (from) params.dateFrom = from;
         if (to) params.dateTo = to;
+        if (from || to) {
+          params.filterTimeZoneOffsetMinutes = -new Date().getTimezoneOffset();
+        }
 
         const { data } = await apiClient.get('/company-visits/company', { params });
         if (!data?.success) {

@@ -1,7 +1,4 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/models/company_visit.dart';
@@ -43,7 +40,6 @@ class _VisitsScreenState extends State<VisitsScreen> {
   List<CompanyVisitRecord> _visits = const [];
   bool _loading = true;
   String? _error;
-  String? _loggedInUserId;
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
@@ -56,27 +52,8 @@ class _VisitsScreenState extends State<VisitsScreen> {
     _selectedDay = _dateOnly(DateTime.now());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduleScrollWeekStripToDate(_selectedDay);
-      _loadUserIdThenVisits();
+      _fetchVisits();
     });
-  }
-
-  Future<void> _loadUserIdThenVisits() async {
-    await _loadLoggedInUserId();
-    if (mounted) await _fetchVisits();
-  }
-
-  Future<void> _loadLoggedInUserId() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('user');
-      if (raw == null || raw.isEmpty) return;
-      final map = jsonDecode(raw);
-      if (map is! Map) return;
-      final id = map['_id'] ?? map['id'] ?? map['userId'];
-      if (id != null && mounted) {
-        setState(() => _loggedInUserId = id is String ? id : id.toString());
-      }
-    } catch (_) {}
   }
 
   @override

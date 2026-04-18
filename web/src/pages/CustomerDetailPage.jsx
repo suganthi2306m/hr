@@ -100,6 +100,9 @@ export default function CustomerDetailPage() {
       if (visitUserId) params.userId = visitUserId;
       if (visitDateFrom) params.dateFrom = visitDateFrom;
       if (visitDateTo) params.dateTo = visitDateTo;
+      if (visitDateFrom || visitDateTo) {
+        params.filterTimeZoneOffsetMinutes = -new Date().getTimezoneOffset();
+      }
 
       const { data } = await apiClient.get('/ops/company-visits', { params });
       if (data?.success && Array.isArray(data.items)) {

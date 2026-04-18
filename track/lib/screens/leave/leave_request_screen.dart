@@ -322,6 +322,8 @@ class _LeaveRequestScreenState extends State<LeaveRequestScreen> {
     );
   }
 
+  // Apply-leave entry is hidden in the header; keep implementation for possible future use.
+  // ignore: unused_element
   Future<void> _openApplySheet() async {
     String leaveType = 'CASUAL';
     DateTimeRange range = DateTimeRange(

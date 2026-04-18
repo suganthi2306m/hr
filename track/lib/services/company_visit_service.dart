@@ -53,7 +53,10 @@ class CompanyVisitService {
     String? status,
   }) async {
     await _setAuthToken();
-    final q = <String, dynamic>{'date': _dayKey.format(date)};
+    final q = <String, dynamic>{
+      'date': _dayKey.format(date),
+      'filterTimeZoneOffsetMinutes': DateTime.now().timeZoneOffset.inMinutes,
+    };
     if (status != null && status.isNotEmpty) {
       q['status'] = status;
     }
@@ -79,6 +82,7 @@ class CompanyVisitService {
       'customerId': customerId,
       'dateFrom': _dayKey.format(from),
       'dateTo': _dayKey.format(to),
+      'filterTimeZoneOffsetMinutes': DateTime.now().timeZoneOffset.inMinutes,
       'limit': limit,
       'page': 1,
     };
