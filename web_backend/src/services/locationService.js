@@ -85,6 +85,8 @@ function toLocationEntry(doc, userMap, taskMap, fencesByCompany) {
     };
   });
 
+  const acc = doc.accuracy != null ? Number(doc.accuracy) : null;
+
   return {
     _id: String(doc._id),
     userId,
@@ -100,8 +102,13 @@ function toLocationEntry(doc, userMap, taskMap, fencesByCompany) {
     batteryPercent: doc.batteryPercent ?? null,
     movementType: doc.movementType ?? null,
     status: doc.status ?? null,
+    appStatus: doc.appStatus ?? null,
+    presenceStatus: doc.presenceStatus ?? null,
+    accuracy: Number.isFinite(acc) ? acc : null,
     address: doc.address || doc.fullAddress || null,
     pincode: doc.pincode || null,
+    city: doc.city ?? null,
+    area: doc.area ?? null,
     taskId,
     taskCode: task?.taskCode || null,
     taskName: task?.taskName || task?.taskTitle || null,

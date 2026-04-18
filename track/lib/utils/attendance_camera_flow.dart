@@ -10,50 +10,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:track/screens/attendance/attendance_camera_screen.dart';
 import 'package:track/services/attendance_service.dart';
 import 'package:track/services/presence_tracking_service.dart';
-import 'package:track/utils/error_message_utils.dart';
-import 'package:track/utils/snackbar_utils.dart';
+import 'package:track/widgets/app_blocking_dialog.dart';
+import 'package:track/widgets/app_feedback.dart';
 
 /// Geo + selfie camera + check-in / check-out API (shared by dashboard and attendance screen).
 class AttendanceCameraFlow {
   AttendanceCameraFlow._();
-
-  static void _showSubmitLoader(BuildContext context, {required bool checkout}) {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      useRootNavigator: true,
-      builder: (ctx) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            content: Row(
-              children: [
-                const SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                const SizedBox(width: 20),
-                Expanded(
-                  child: Text(
-                    checkout ? 'Submitting check-out…' : 'Submitting check-in…',
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  static void _hideSubmitLoader(BuildContext context) {
-    if (!context.mounted) return;
-    final nav = Navigator.of(context, rootNavigator: true);
-    if (nav.canPop) nav.pop();
-  }
 
   static Future<String> resolveAddress(Position p) async {
     try {
@@ -155,28 +117,29 @@ class AttendanceCameraFlow {
       final addressForApi = capture.address.trim();
 
       if (!context.mounted) return false;
-      _showSubmitLoader(context, checkout: checkout);
-      try {
-        final service = AttendanceService();
-        if (checkout) {
-          await service.checkOut(
-            selfiePath: capture.filePath,
-            position: positionForApi,
-            address: addressForApi,
-          );
-        } else {
-          await service.checkIn(
-            selfiePath: capture.filePath,
-            position: positionForApi,
-            address: addressForApi,
-          );
-        }
-      } finally {
-        _hideSubmitLoader(context);
-      }
+      await AppBlockingDialog.run<void>(
+        context,
+        message: checkout ? 'Submitting check-out…' : 'Submitting check-in…',
+        action: () async {
+          final service = AttendanceService();
+          if (checkout) {
+            await service.checkOut(
+              selfiePath: capture.filePath,
+              position: positionForApi,
+              address: addressForApi,
+            );
+          } else {
+            await service.checkIn(
+              selfiePath: capture.filePath,
+              position: positionForApi,
+              address: addressForApi,
+            );
+          }
+        },
+      );
 
       if (!context.mounted) return true;
-      SnackBarUtils.showSnackBar(
+      AppFeedback.success(
         context,
         checkout
             ? 'Checked out successfully at ${DateFormat('hh:mm a').format(DateTime.now())}'
@@ -207,10 +170,9 @@ class AttendanceCameraFlow {
       return true;
     } catch (e) {
       if (!context.mounted) return false;
-      SnackBarUtils.showSnackBar(
+      AppFeedback.error(
         context,
-        ErrorMessageUtils.toUserFriendlyMessage(e),
-        isError: true,
+        e,
         actionLabel: 'Retry',
         onAction: () {
           scheduleMicrotask(() => run(context, checkout: checkout));

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GoogleMap, InfoWindow, Marker, Polyline } from '@react-google-maps/api';
+import { GoogleMap, Marker, Polyline } from '@react-google-maps/api';
 import { io } from 'socket.io-client';
 import dayjs from 'dayjs';
 import apiClient, { SOCKET_BASE_URL } from '../api/client';
-import { LiveTrackWordmark } from '../components/brand/LiveTrackWordmark';
+import LiveTrackLocationDetailPanel from '../components/liveTrack/LiveTrackLocationDetailPanel';
+import LiveTrackStaffCards from '../components/liveTrack/LiveTrackStaffCards';
 import UiSelect from '../components/common/UiSelect';
 import { useGoogleMaps } from '../context/GoogleMapsContext';
 import { FLUX_PRIMARY, FLUX_ROUTE_GOLD, fluxCircleMarkerIcon, getFluxMapOptions } from '../theme/fluxMap';
 
 const mapContainerStyle = { width: '100%', height: '65vh' };
+const ROUTE_POLYLINE_SNAP_METERS = 900;
 const defaultCenter = { lat: 20.5937, lng: 78.9629 };
 const SOCKET_URL = SOCKET_BASE_URL;
 /** Avoid fitBounds zooming to max when there is only one point (grey “blank” map). */
@@ -27,6 +29,53 @@ function locationDayKey(ts) {
   return dayjs(ts).format('YYYY-MM-DD');
 }
 
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(Math.min(1, a)));
+}
+
+/** Pick the stored route sample closest to a map click (full location entry). */
+function nearestRoutePoint(orderedEntries, clickLat, clickLng, maxMeters) {
+  let best = null;
+  let bestD = Infinity;
+  for (const entry of orderedEntries) {
+    const lat = Number(entry.latitude);
+    const lng = Number(entry.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const d = haversineMeters(clickLat, clickLng, lat, lng);
+    if (d < bestD) {
+      bestD = d;
+      best = entry;
+    }
+  }
+  if (!best || bestD > maxMeters) return null;
+  return best;
+}
+
+/** Interior polyline vertex indices for tappable numbered samples (excludes first/last; those use dedicated pins). */
+function interiorRouteIndices(length, maxInterior) {
+  if (length < 3) return [];
+  const inner = length - 2;
+  if (inner <= maxInterior) {
+    return Array.from({ length: inner }, (_, k) => k + 1);
+  }
+  const out = [];
+  for (let k = 0; k < maxInterior; k += 1) {
+    const t = (k + 1) / (maxInterior + 1);
+    const idx = 1 + Math.floor(t * inner);
+    out.push(idx);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
+}
+
+const ROUTE_WAYPOINT_CAP = 26;
+
 function LiveTrackPage() {
   const [trackingPoints, setTrackingPoints] = useState([]);
   const [historyPoints, setHistoryPoints] = useState([]);
@@ -34,8 +83,15 @@ function LiveTrackPage() {
   const [selectedUserId, setSelectedUserId] = useState('');
   const [activityFilter, setActivityFilter] = useState('all');
   const [routeDate, setRouteDate] = useState(() => dayjs().format('YYYY-MM-DD'));
-  const [activeMarker, setActiveMarker] = useState(null);
+  /** `{ source, entry }` — live user pin or a history / route point */
+  const [mapDetail, setMapDetail] = useState(null);
+  const [resolvedAddress, setResolvedAddress] = useState('');
+  const [routePolyline, setRoutePolyline] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [dataRevision, setDataRevision] = useState(0);
   const mapRef = useRef(null);
+  const geocoderRef = useRef(null);
+  const routeOrderedRef = useRef([]);
   const historyUserIdRef = useRef('');
   const routeDateRef = useRef(routeDate);
 
@@ -45,22 +101,54 @@ function LiveTrackPage() {
     routeDateRef.current = routeDate;
   }, [routeDate]);
 
-  useEffect(() => {
-    async function bootstrap() {
-      try {
-        const [{ data: usersData }, { data: trackingData }] = await Promise.all([
-          apiClient.get('/users'),
-          apiClient.get('/tracking/latest'),
-        ]);
-        setUsers(Array.isArray(usersData?.items) ? usersData.items : []);
-        setTrackingPoints(Array.isArray(trackingData?.items) ? trackingData.items : []);
-      } catch {
-        setUsers([]);
-        setTrackingPoints([]);
-      }
+  const loadBootstrap = useCallback(async () => {
+    try {
+      const [{ data: usersData }, { data: trackingData }] = await Promise.all([
+        apiClient.get('/users'),
+        apiClient.get('/tracking/latest'),
+      ]);
+      setUsers(Array.isArray(usersData?.items) ? usersData.items : []);
+      setTrackingPoints(Array.isArray(trackingData?.items) ? trackingData.items : []);
+    } catch {
+      setUsers([]);
+      setTrackingPoints([]);
     }
-    bootstrap();
   }, []);
+
+  useEffect(() => {
+    loadBootstrap();
+  }, [loadBootstrap]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    setDataRevision((n) => n + 1);
+    try {
+      await loadBootstrap();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadBootstrap]);
+
+  const staffUsers = useMemo(() => {
+    return users.filter((u) => {
+      const r = String(u.role || 'field_agent').toLowerCase();
+      return r === 'field_agent' || r === 'field_user';
+    });
+  }, [users]);
+
+  const trackingByUserIdForDay = useMemo(() => {
+    const m = new Map();
+    trackingPoints.forEach((p) => {
+      if (locationDayKey(p.timestamp) !== routeDate) return;
+      m.set(String(p.userId), p);
+    });
+    return m;
+  }, [trackingPoints, routeDate]);
+
+  const dayLatestPoints = useMemo(
+    () => trackingPoints.filter((p) => locationDayKey(p.timestamp) === routeDate),
+    [trackingPoints, routeDate],
+  );
 
   const filteredLocations = useMemo(() => {
     return trackingPoints.filter((item) => {
@@ -73,7 +161,7 @@ function LiveTrackPage() {
   }, [activityFilter, trackingPoints, selectedUserId, routeDate]);
 
   const userFilterOptions = useMemo(
-    () => [{ value: '', label: 'All users' }, ...users.map((u) => ({ value: String(u._id), label: u.name }))],
+    () => [{ value: '', label: 'All staff' }, ...users.map((u) => ({ value: String(u._id), label: u.name }))],
     [users],
   );
 
@@ -116,7 +204,7 @@ function LiveTrackPage() {
       }
     }
     loadHistory();
-  }, [historyUserId, routeDate]);
+  }, [historyUserId, routeDate, dataRevision]);
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
@@ -138,12 +226,98 @@ function LiveTrackPage() {
     return () => socket.disconnect();
   }, []);
 
-  const polylinePath = useMemo(() => {
-    const points = [...historyPoints].reverse();
-    return points
-      .filter((item) => Number.isFinite(item.latitude) && Number.isFinite(item.longitude))
-      .map((item) => ({ lat: item.latitude, lng: item.longitude }));
+  /** Chronological (oldest → newest) for the trail and for nearest-point lookup */
+  const routeOrdered = useMemo(() => {
+    return [...historyPoints]
+      .reverse()
+      .filter((item) => Number.isFinite(item.latitude) && Number.isFinite(item.longitude));
   }, [historyPoints]);
+
+  useEffect(() => {
+    routeOrderedRef.current = routeOrdered;
+  }, [routeOrdered]);
+
+  const polylinePath = useMemo(
+    () => routeOrdered.map((item) => ({ lat: item.latitude, lng: item.longitude })),
+    [routeOrdered],
+  );
+
+  const routeEndpoints = useMemo(() => {
+    if (routeOrdered.length < 2) return { start: null, end: null };
+    return { start: routeOrdered[0], end: routeOrdered[routeOrdered.length - 1] };
+  }, [routeOrdered]);
+
+  const routeWaypoints = useMemo(() => {
+    if (!historyUserId) return [];
+    const n = routeOrdered.length;
+    return interiorRouteIndices(n, ROUTE_WAYPOINT_CAP).map((i) => ({
+      key: `${historyUserId}-${routeOrdered[i]._id || i}-${i}`,
+      entry: routeOrdered[i],
+      label: String(i + 1),
+    }));
+  }, [historyUserId, routeOrdered]);
+
+  const mapStats = useMemo(() => {
+    const workers = staffUsers.length;
+    const active = dayLatestPoints.filter((p) => p.isActive).length;
+    const inactive = dayLatestPoints.filter((p) => !p.isActive).length;
+    const points = historyUserId ? routeOrdered.length : dayLatestPoints.length;
+    return { workers, active, inactive, points };
+  }, [staffUsers.length, dayLatestPoints, historyUserId, routeOrdered.length]);
+
+  useEffect(() => {
+    if (isLoaded && window.google?.maps && !geocoderRef.current) {
+      geocoderRef.current = new window.google.maps.Geocoder();
+    }
+  }, [isLoaded]);
+
+  useEffect(() => {
+    const entry = mapDetail?.entry;
+    if (!entry) {
+      setResolvedAddress('');
+      return undefined;
+    }
+    if (entry.address) {
+      setResolvedAddress('');
+      return undefined;
+    }
+    const lat = Number(entry.latitude);
+    const lng = Number(entry.longitude);
+    const gc = geocoderRef.current;
+    if (!gc || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setResolvedAddress('');
+      return undefined;
+    }
+    let cancelled = false;
+    setResolvedAddress('…');
+    gc.geocode({ location: { lat, lng } }, (results, status) => {
+      if (cancelled) return;
+      if (status === 'OK' && results?.[0]?.formatted_address) {
+        setResolvedAddress(results[0].formatted_address);
+      } else {
+        setResolvedAddress('');
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mapDetail]);
+
+  useEffect(() => {
+    if (!routePolyline || !window.google?.maps) return undefined;
+    const listener = routePolyline.addListener('click', (e) => {
+      const ll = e.latLng;
+      if (!ll) return;
+      const hit = nearestRoutePoint(
+        routeOrderedRef.current,
+        ll.lat(),
+        ll.lng(),
+        ROUTE_POLYLINE_SNAP_METERS,
+      );
+      if (hit) setMapDetail({ source: 'route', entry: hit });
+    });
+    return () => listener.remove();
+  }, [routePolyline]);
 
   const applyMapBounds = useCallback(() => {
     const map = mapRef.current;
@@ -200,15 +374,20 @@ function LiveTrackPage() {
   }
 
   return (
-    <section className="space-y-4">
-      <div>
-        <LiveTrackWordmark as="h1" className="text-2xl font-black tracking-tight text-dark" />
-        <p className="mt-1 text-sm text-slate-500">Live positions, routes and history for your field users.</p>
+    <section className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-black tracking-tight text-dark">Live tracking</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Staff positions, daily trails, and point-level detail — pick a staff member or tap the map.
+          </p>
+        </div>
       </div>
-      <div className="grid gap-4 rounded-2xl border border-neutral-200/90 bg-white p-4 shadow-panel sm:grid-cols-2 xl:grid-cols-4">
-        <div className="form-field sm:mb-0">
+
+      <div className="grid gap-4 rounded-2xl border border-neutral-200/90 bg-white p-4 shadow-panel sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
+        <div className="form-field lg:col-span-4">
           <label htmlFor="track-user" className="form-label">
-            User filter
+            Staff
           </label>
           <UiSelect
             id="track-user"
@@ -217,7 +396,7 @@ function LiveTrackPage() {
             options={userFilterOptions}
           />
         </div>
-        <div className="form-field">
+        <div className="form-field lg:col-span-3">
           <label htmlFor="track-activity" className="form-label">
             Activity
           </label>
@@ -228,7 +407,7 @@ function LiveTrackPage() {
             options={ACTIVITY_OPTIONS}
           />
         </div>
-        <div className="form-field">
+        <div className="form-field lg:col-span-3">
           <label htmlFor="track-date" className="form-label">
             Date
           </label>
@@ -241,97 +420,220 @@ function LiveTrackPage() {
             onChange={(e) => setRouteDate(e.target.value || dayjs().format('YYYY-MM-DD'))}
           />
         </div>
-        <div className="flex items-end">
-          <p className="w-full rounded-xl border border-neutral-200 bg-flux-panel px-4 py-3 text-sm font-semibold text-dark">
-            Showing {filteredLocations.length} on map
-            {polylinePath.length > 1 && (
-              <span className="mt-1 block text-xs font-normal text-slate-600">
-                Route: {polylinePath.length} points on {dayjs(routeDate).format('DD MMM YYYY')}
-              </span>
-            )}
-            {polylinePath.length <= 1 && historyUserId && (
-              <span className="mt-1 block text-xs font-normal text-slate-600">
-                {polylinePath.length === 0 ? 'No trail' : 'Single point'} for {dayjs(routeDate).format('DD MMM YYYY')}
-              </span>
-            )}
-          </p>
+        <div className="flex lg:col-span-2">
+          <button
+            type="button"
+            className="btn-primary inline-flex w-full items-center justify-center gap-2 py-2.5 disabled:opacity-60"
+            onClick={onRefresh}
+            disabled={refreshing}
+          >
+            <span className={refreshing ? 'animate-pulse' : ''} aria-hidden>
+              ↻
+            </span>
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-panel">
-        <GoogleMap
-          mapContainerStyle={mapContainerStyle}
-          center={defaultCenter}
-          zoom={6}
-          options={getFluxMapOptions()}
-          onLoad={(map) => {
-            mapRef.current = map;
-            applyMapBounds();
-          }}
-        >
-        {historyUserId && polylinePath.length > 1 && (
-          <Polyline
-            path={polylinePath}
-            options={{
-              strokeColor: FLUX_ROUTE_GOLD,
-              strokeOpacity: 0.95,
-              strokeWeight: 4,
+      <div className="flex flex-col overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-panel lg:min-h-[70vh] lg:flex-row lg:items-stretch">
+        <div className="relative min-h-[60vh] min-w-0 flex-1 lg:min-h-[70vh]">
+          <GoogleMap
+            mapContainerStyle={mapContainerStyle}
+            center={defaultCenter}
+            zoom={6}
+            options={getFluxMapOptions()}
+            onLoad={(map) => {
+              mapRef.current = map;
+              applyMapBounds();
             }}
-          />
-        )}
-
-        {filteredLocations.map((item) => {
-          return (
-            <Marker
-              key={item.userId}
-              position={{ lat: item.latitude, lng: item.longitude }}
-              title={item.userName}
-              onClick={() => setActiveMarker(item)}
-              icon={
-                window.google?.maps
-                  ? fluxCircleMarkerIcon(window.google, {
-                      fill: item.isActive ? FLUX_PRIMARY : '#111111',
-                      stroke: '#ffffff',
-                      scale: item.isActive ? 12 : 10,
-                    })
-                  : undefined
-              }
-            />
-          );
-        })}
-
-        {activeMarker && (
-          <InfoWindow
-            position={{ lat: activeMarker.latitude, lng: activeMarker.longitude }}
-            onCloseClick={() => setActiveMarker(null)}
           >
-            <div>
-              <p className="font-semibold">{activeMarker.userName}</p>
-              <p className="text-xs text-slate-500">
-                Last updated: {dayjs(activeMarker.timestamp).format('DD MMM YYYY hh:mm:ss A')}
+            {historyUserId && polylinePath.length > 1 && (
+              <Polyline
+                path={polylinePath}
+                onLoad={(poly) => setRoutePolyline(poly)}
+                onUnmount={() => setRoutePolyline(null)}
+                options={{
+                  strokeColor: FLUX_ROUTE_GOLD,
+                  strokeOpacity: 0.95,
+                  strokeWeight: 5,
+                  clickable: true,
+                }}
+              />
+            )}
+
+            {historyUserId &&
+              routeWaypoints.map(({ key, entry, label }) => (
+                <Marker
+                  key={key}
+                  position={{ lat: entry.latitude, lng: entry.longitude }}
+                  title={`Point ${label} — open details`}
+                  zIndex={3}
+                  onClick={(e) => {
+                    e?.domEvent?.stopPropagation?.();
+                    setMapDetail({ source: 'route', entry });
+                  }}
+                  label={{
+                    text: label,
+                    color: '#ffffff',
+                    fontSize: '10px',
+                    fontWeight: '700',
+                  }}
+                  icon={
+                    window.google?.maps
+                      ? fluxCircleMarkerIcon(window.google, {
+                          fill: '#15803d',
+                          stroke: '#ffffff',
+                          scale: 10,
+                        })
+                      : undefined
+                  }
+                />
+              ))}
+
+            {routeEndpoints.start && routeEndpoints.end && historyUserId && (
+              <>
+                <Marker
+                  key={`route-start-${historyUserId}`}
+                  position={{ lat: routeEndpoints.start.latitude, lng: routeEndpoints.start.longitude }}
+                  title="Route start (oldest point this day)"
+                  zIndex={4}
+                  onClick={(e) => {
+                    e?.domEvent?.stopPropagation?.();
+                    setMapDetail({ source: 'route', entry: routeEndpoints.start });
+                  }}
+                  label={{ text: 'S', color: '#ffffff', fontSize: '11px', fontWeight: '800' }}
+                  icon={
+                    window.google?.maps
+                      ? fluxCircleMarkerIcon(window.google, {
+                          fill: '#16a34a',
+                          stroke: '#ffffff',
+                          scale: 10,
+                        })
+                      : undefined
+                  }
+                />
+                <Marker
+                  key={`route-end-${historyUserId}`}
+                  position={{ lat: routeEndpoints.end.latitude, lng: routeEndpoints.end.longitude }}
+                  title="Latest point on trail"
+                  zIndex={5}
+                  onClick={(e) => {
+                    e?.domEvent?.stopPropagation?.();
+                    setMapDetail({ source: 'route', entry: routeEndpoints.end });
+                  }}
+                  label={{ text: 'E', color: '#111111', fontSize: '11px', fontWeight: '800' }}
+                  icon={
+                    window.google?.maps
+                      ? fluxCircleMarkerIcon(window.google, {
+                          fill: FLUX_PRIMARY,
+                          stroke: '#111111',
+                          scale: 12,
+                        })
+                      : undefined
+                  }
+                />
+              </>
+            )}
+
+            {filteredLocations.map((item) => {
+              return (
+                <Marker
+                  key={item.userId}
+                  position={{ lat: item.latitude, lng: item.longitude }}
+                  title={item.userName}
+                  zIndex={6}
+                  onClick={(e) => {
+                    e?.domEvent?.stopPropagation?.();
+                    setMapDetail({ source: 'live', entry: item });
+                  }}
+                  icon={
+                    window.google?.maps
+                      ? fluxCircleMarkerIcon(window.google, {
+                          fill: item.isActive ? FLUX_PRIMARY : '#111111',
+                          stroke: '#ffffff',
+                          scale: item.isActive ? 12 : 10,
+                        })
+                      : undefined
+                  }
+                />
+              );
+            })}
+          </GoogleMap>
+
+          <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-[min(100%-1.5rem,20rem)]">
+            <div className="pointer-events-auto rounded-2xl border border-neutral-200/90 bg-white/95 p-3 shadow-panel backdrop-blur-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Overview</p>
+              <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <div>
+                  <dt className="text-xs text-slate-500">Workers</dt>
+                  <dd className="font-black text-dark">{mapStats.workers}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Points</dt>
+                  <dd className="font-black text-dark">{mapStats.points}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-emerald-600">Active</dt>
+                  <dd className="font-bold text-emerald-700">{mapStats.active}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-slate-500">Inactive</dt>
+                  <dd className="font-bold text-slate-700">{mapStats.inactive}</dd>
+                </div>
+              </dl>
+              <p className="mt-2 border-t border-neutral-100 pt-2 text-[11px] text-slate-500">
+                Pins on map: {filteredLocations.length}
+                {polylinePath.length > 1 ? ` · Trail: ${polylinePath.length} pts` : ''}
               </p>
-              <p className="text-xs text-slate-500">Status: {activeMarker.isActive ? 'Active' : 'Inactive'}</p>
-              <p className="text-xs text-slate-500">Task: {activeMarker.taskName || activeMarker.taskCode || '-'}</p>
-              <p className="text-xs text-slate-500">Task status: {activeMarker.taskStatus || '-'}</p>
-              <p className="text-xs text-slate-500">Address: {activeMarker.address || '-'}</p>
-              {activeMarker.idleMinutes != null && (
-                <p className="text-xs text-slate-500">
-                  Idle ~{Math.round(activeMarker.idleMinutes)} min {activeMarker.isIdle ? '(flagged)' : ''}
-                </p>
-              )}
-              {activeMarker.geofenceStatus?.length > 0 && (
-                <ul className="mt-1 text-xs text-slate-500">
-                  {activeMarker.geofenceStatus.map((g) => (
-                    <li key={g.id}>
-                      {g.name}: {g.inside ? 'Inside' : 'Outside'} ({g.distanceM}m)
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
-          </InfoWindow>
-        )}
-        </GoogleMap>
+          </div>
+        </div>
+
+        <aside className="flex max-h-[min(70vh,32rem)] w-full shrink-0 flex-col border-t border-neutral-200 lg:max-h-none lg:w-[22rem] lg:border-l lg:border-t-0">
+          {mapDetail ? (
+            <LiveTrackLocationDetailPanel
+              entry={mapDetail.entry}
+              source={mapDetail.source}
+              resolvedAddress={resolvedAddress}
+              onClose={() => setMapDetail(null)}
+              onSeeAll={(e) => {
+                if (e?.userId) {
+                  setSelectedUserId(String(e.userId));
+                  setMapDetail(null);
+                }
+              }}
+            />
+          ) : (
+            <div className="flex flex-1 flex-col justify-center p-5">
+              <h2 className="text-sm font-bold text-dark">Point details</h2>
+              <p className="mt-3 text-xs leading-relaxed text-slate-600">
+                Tap a <strong className="text-dark">staff pin</strong> (latest position), a{' '}
+                <strong className="text-dark">numbered green</strong> sample along the route,{' '}
+                <strong className="text-dark">S / E</strong> for start or end, or{' '}
+                <strong className="text-dark">click the yellow line</strong> to snap to the nearest GPS point. This
+                panel shows address, battery, presence, GPS accuracy, and task context.
+              </p>
+            </div>
+          )}
+        </aside>
+      </div>
+
+      <div>
+        <h2 className="mb-3 text-lg font-black text-dark">Staff</h2>
+        <LiveTrackStaffCards
+          staffUsers={staffUsers}
+          trackingByUserId={trackingByUserIdForDay}
+          routeDate={routeDate}
+          selectedUserId={selectedUserId}
+          onSelectUser={(uid) => {
+            setSelectedUserId(uid);
+            setMapDetail(null);
+          }}
+          onViewTimeline={(uid) => {
+            setSelectedUserId(uid);
+            setMapDetail(null);
+          }}
+        />
       </div>
     </section>
   );

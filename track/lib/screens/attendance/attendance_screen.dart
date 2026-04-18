@@ -2,12 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:track/config/app_colors.dart';
+import 'package:track/navigation/main_shell_navigation.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:track/models/attendance_record.dart';
 import 'package:track/services/attendance_service.dart';
 import 'package:track/services/presence_tracking_service.dart';
 import 'package:track/utils/attendance_camera_flow.dart';
 import 'package:track/utils/date_display_util.dart';
+import 'package:track/screens/attendance/attendance_summary_screen.dart';
+import 'package:track/widgets/app_feedback.dart';
+import 'package:track/widgets/app_shell_navigation.dart';
 import 'package:track/widgets/app_tab_loader.dart';
 
 class AttendanceScreen extends StatefulWidget {
@@ -67,9 +71,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Load failed: $e')),
-      );
+      AppFeedback.error(context, e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -203,15 +205,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         reason: reasonCtrl.text.trim(),
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Leave applied successfully')),
-      );
+      AppFeedback.success(context, 'Leave applied successfully');
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Leave apply failed: $e')),
-      );
+      AppFeedback.error(context, e);
     }
   }
 
@@ -219,8 +217,20 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Attendance & Leave'),
+        title: const Text('Attendance'),
         actions: [
+          IconButton(
+            tooltip: 'Monthly summary',
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const AttendanceSummaryScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.bar_chart_rounded),
+          ),
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh_rounded)),
         ],
       ),
@@ -371,6 +381,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 ],
               ),
             ),
+      bottomNavigationBar: OvalBottomNavBar(
+        currentIndex: 3,
+        onTap: (index) {
+          if (index == 3) return;
+          pushMainShellByIndex(context, index);
+        },
+      ),
     );
   }
 }

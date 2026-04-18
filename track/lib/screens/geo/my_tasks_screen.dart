@@ -7,6 +7,7 @@ import 'package:track/config/app_route_observer.dart';
 import 'package:track/models/task.dart';
 import 'package:track/services/customer_service.dart';
 import 'package:track/services/task_service.dart';
+import 'package:track/screens/attendance/attendance_screen.dart';
 import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/dashboard/dashboard_screen.dart';
 import 'package:track/screens/geo/add_task_screen.dart';
@@ -860,6 +861,7 @@ class _MyTasksScreenState extends State<MyTasksScreen>
     final Widget target = switch (index) {
       0 => const DashboardScreen(),
       2 => const VisitsScreen(),
+      3 => const AttendanceScreen(),
       _ => const MyTasksScreen(),
     };
     Navigator.pushReplacement(

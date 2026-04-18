@@ -22,7 +22,8 @@ const DIAL_OPTIONS = [
 ];
 
 const defaultMapCenter = { lat: 20.5937, lng: 78.9629 };
-const mapContainerStyle = { width: '100%', height: 'min(72vh, 640px)' };
+const MAP_AREA_HEIGHT = 'min(72vh,640px)';
+const mapContainerStyle = { width: '100%', height: '100%' };
 const PAGE_SIZE = 12;
 
 const emptyForm = () => ({
@@ -109,7 +110,7 @@ function MapCompanyTooltip({ c }) {
     padding: 0,
     color: '#ffffff',
     WebkitTextFillColor: '#ffffff',
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: 700,
     lineHeight: 1.35,
     letterSpacing: '0.01em',
@@ -203,11 +204,6 @@ function CustomersPage() {
     if (!customerQuery.trim()) return mapPlotted;
     return mapPlotted.filter((c) => customerMatchesSearch(c, customerQuery));
   }, [mapPlotted, customerQuery]);
-
-  const mapSelectedCustomer = useMemo(() => {
-    if (!mapActiveId) return null;
-    return visibleOnMap.find((x) => String(x._id) === mapActiveId) ?? null;
-  }, [mapActiveId, visibleOnMap]);
 
   const mapTooltipCustomer = useMemo(() => {
     const id = mapHoverId || mapActiveId;
@@ -909,107 +905,120 @@ function CustomersPage() {
           </p>
           {locationsGoHint ? <p className="text-sm font-medium text-dark">{locationsGoHint}</p> : null}
 
-          <div className="relative overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-panel">
-            {!isLoaded && <p className="p-6 text-sm text-slate-500">Loading map…</p>}
-            {isLoaded && (
-              <GoogleMap
-                mapContainerStyle={mapContainerStyle}
-                center={defaultMapCenter}
-                zoom={5}
-                options={getFluxMapOptions()}
-                onLoad={(map) => {
-                  mapRef.current = map;
-                }}
-                onClick={() => {
-                  if (skipNextMapBackgroundClickRef.current) {
-                    skipNextMapBackgroundClickRef.current = false;
-                    return;
-                  }
-                  setMapActiveId(null);
-                  setMapHoverId('');
-                  cancelMapHoverClear();
-                }}
-              >
-                {visibleOnMap.map((c) => {
-                  const lat = Number(c.geoLocation.lat);
-                  const lng = Number(c.geoLocation.lng);
-                  const id = String(c._id);
-                  const active = isCustomerOperationalActive(c);
-                  return (
-                    <Marker
-                      key={id}
-                      position={{ lat, lng }}
-                      title=""
-                      onClick={() => {
-                        skipNextMapBackgroundClickRef.current = true;
-                        setMapActiveId(id);
-                        cancelMapHoverClear();
-                        setMapHoverId(id);
-                        window.setTimeout(() => {
-                          skipNextMapBackgroundClickRef.current = false;
-                        }, 120);
-                      }}
-                      onMouseOver={() => {
-                        cancelMapHoverClear();
-                        setMapHoverId(id);
-                      }}
-                      onMouseOut={() => {
-                        scheduleMapHoverClear();
-                      }}
-                      icon={window.google?.maps ? getCustomerMapPinIcon(window.google, { active }) : undefined}
-                    />
-                  );
-                })}
-                {mapTooltipCustomer && (
-                  <OverlayView
-                    key={`tip-${mapTooltipCustomer._id}`}
-                    position={{
-                      lat: Number(mapTooltipCustomer.geoLocation.lat),
-                      lng: Number(mapTooltipCustomer.geoLocation.lng),
-                    }}
-                    mapPaneName={OVERLAY_MOUSE_TARGET}
-                    getPixelPositionOffset={customerTooltipPixelOffset}
-                  >
-                    <div
-                      className="pointer-events-auto"
-                      style={{ color: '#fafafa' }}
-                      onMouseEnter={cancelMapHoverClear}
-                      onMouseLeave={scheduleMapHoverClear}
-                      onClick={(e) => e.stopPropagation()}
-                      role="presentation"
-                    >
-                      <MapCompanyTooltip c={mapTooltipCustomer} />
-                    </div>
-                  </OverlayView>
-                )}
-              </GoogleMap>
-            )}
-            <div className="pointer-events-none absolute bottom-4 right-4 z-[1] rounded-2xl border border-neutral-200 bg-white px-4 py-3 shadow-panel-lg">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">On map</p>
-              <p className="text-lg font-black text-dark">{visibleOnMap.length}</p>
-              <p className="text-xs text-slate-500">customers with a saved pin</p>
-            </div>
-          </div>
-
-          {mapSelectedCustomer ? (
-            <div className="flux-card rounded-2xl border border-neutral-200 bg-white p-4 shadow-panel-lg">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <h3 className="text-base font-bold text-dark">Company details</h3>
-                <button
-                  type="button"
-                  onClick={() => setMapActiveId(null)}
-                  className="shrink-0 rounded-lg border border-neutral-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-neutral-50"
+          <div className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-panel md:flex-row">
+            <div
+              className="relative min-h-0 w-full shrink-0 md:min-w-0 md:flex-1"
+              style={{ height: MAP_AREA_HEIGHT }}
+            >
+              {!isLoaded && <p className="p-6 text-sm text-slate-500">Loading map…</p>}
+              {isLoaded && (
+                <GoogleMap
+                  mapContainerStyle={mapContainerStyle}
+                  center={defaultMapCenter}
+                  zoom={5}
+                  options={getFluxMapOptions()}
+                  onLoad={(map) => {
+                    mapRef.current = map;
+                  }}
+                  onClick={() => {
+                    if (skipNextMapBackgroundClickRef.current) {
+                      skipNextMapBackgroundClickRef.current = false;
+                      return;
+                    }
+                    setMapActiveId(null);
+                    setMapHoverId('');
+                    cancelMapHoverClear();
+                  }}
                 >
-                  Close
-                </button>
+                  {visibleOnMap.map((c) => {
+                    const lat = Number(c.geoLocation.lat);
+                    const lng = Number(c.geoLocation.lng);
+                    const id = String(c._id);
+                    const active = isCustomerOperationalActive(c);
+                    return (
+                      <Marker
+                        key={id}
+                        position={{ lat, lng }}
+                        title=""
+                        onClick={() => {
+                          skipNextMapBackgroundClickRef.current = true;
+                          setMapActiveId(id);
+                          cancelMapHoverClear();
+                          setMapHoverId(id);
+                          window.setTimeout(() => {
+                            skipNextMapBackgroundClickRef.current = false;
+                          }, 120);
+                        }}
+                        onMouseOver={() => {
+                          cancelMapHoverClear();
+                          setMapHoverId(id);
+                        }}
+                        onMouseOut={() => {
+                          scheduleMapHoverClear();
+                        }}
+                        icon={window.google?.maps ? getCustomerMapPinIcon(window.google, { active }) : undefined}
+                      />
+                    );
+                  })}
+                  {mapTooltipCustomer && (
+                    <OverlayView
+                      key={`tip-${mapTooltipCustomer._id}`}
+                      position={{
+                        lat: Number(mapTooltipCustomer.geoLocation.lat),
+                        lng: Number(mapTooltipCustomer.geoLocation.lng),
+                      }}
+                      mapPaneName={OVERLAY_MOUSE_TARGET}
+                      getPixelPositionOffset={customerTooltipPixelOffset}
+                    >
+                      <div
+                        className="pointer-events-auto"
+                        style={{ color: '#fafafa' }}
+                        onMouseEnter={cancelMapHoverClear}
+                        onMouseLeave={scheduleMapHoverClear}
+                        onClick={(e) => e.stopPropagation()}
+                        role="presentation"
+                      >
+                        <MapCompanyTooltip c={mapTooltipCustomer} />
+                      </div>
+                    </OverlayView>
+                  )}
+                </GoogleMap>
+              )}
+              <div className="pointer-events-none absolute bottom-4 right-4 z-[1] rounded-2xl border border-neutral-200 bg-white px-4 py-3 shadow-panel-lg">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">On map</p>
+                <p className="text-lg font-black text-dark">{visibleOnMap.length}</p>
+                <p className="text-xs text-slate-500">customers with a saved pin</p>
               </div>
-              <CustomerProfileSummary c={mapSelectedCustomer} />
             </div>
-          ) : (
-            <p className="rounded-2xl border border-dashed border-neutral-200 bg-flux-panel/60 px-4 py-3 text-center text-sm text-slate-500">
-              Hover or click a location pin for the company name on the map; full details stay in the card below.
-            </p>
-          )}
+
+            <aside className="flex min-h-0 w-full shrink-0 flex-col border-t border-neutral-200 bg-flux-panel/40 md:w-72 md:self-stretch md:border-t-0 md:border-l">
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+                {mapTooltipCustomer ? (
+                  <div className="flux-card rounded-xl border border-neutral-200 bg-white p-3 shadow-sm">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">Company details</h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMapActiveId(null);
+                          setMapHoverId('');
+                          cancelMapHoverClear();
+                        }}
+                        className="shrink-0 rounded-lg border border-neutral-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-neutral-50"
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <CustomerProfileSummary c={mapTooltipCustomer} compact />
+                  </div>
+                ) : (
+                  <p className="rounded-xl border border-dashed border-neutral-200 bg-white/80 px-3 py-4 text-center text-xs leading-relaxed text-slate-500">
+                    Hover or click a pin to see customer details here — no need to scroll past the map.
+                  </p>
+                )}
+              </div>
+            </aside>
+          </div>
 
           {withoutGeoCount > 0 && (
             <p className="text-sm text-slate-600">

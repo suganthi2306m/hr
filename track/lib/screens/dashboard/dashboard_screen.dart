@@ -7,8 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/models/attendance_record.dart';
 import 'package:track/models/task.dart';
-import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/attendance/attendance_screen.dart';
+import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/customers/company_customers_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
 import 'package:track/screens/geo/add_task_screen.dart';
@@ -423,8 +423,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final Widget target = switch (index) {
       1 => const MyTasksScreen(),
       2 => const VisitsScreen(),
-      3 => const ProfileScreen(),
-      4 => const SettingsScreen(),
+      3 => const AttendanceScreen(),
+      4 => const ProfileScreen(),
+      5 => const SettingsScreen(),
       _ => const DashboardScreen(),
     };
     Navigator.push(
@@ -450,15 +451,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context,
       MaterialPageRoute(builder: (_) => const AddCustomerScreen()),
     );
-  }
-
-  void _openAttendance(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const AttendanceScreen()),
-    ).then((_) {
-      if (mounted) _bootstrap();
-    });
   }
 
   void _openCompanyCustomers(BuildContext context) {
@@ -516,8 +508,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ? () => _openAddTask(context)
           : null,
       onAddCustomer: () => _openCreateCustomer(context),
-      onProfile: () => _navigateToIndex(context, 3),
-      onSettings: () => _navigateToIndex(context, 4),
+      onProfile: () => _navigateToIndex(context, 4),
+      onSettings: () => _navigateToIndex(context, 5),
       onLogout: () => _logout(context),
     );
   }
@@ -827,7 +819,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _circleIconButton(
           icon: Icons.person_outline_rounded,
           tooltip: 'Profile',
-          onPressed: () => _navigateToIndex(context, 3),
+          onPressed: () => _navigateToIndex(context, 4),
         ),
       ],
     );
@@ -917,13 +909,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               icon: Icons.person_outline_rounded,
                               selected: false,
                               tooltip: 'Profile',
-                              onTap: () => _navigateToIndex(context, 3),
+                              onTap: () => _navigateToIndex(context, 4),
                             ),
                             _shortcutChip(
                               icon: Icons.settings_outlined,
                               selected: false,
                               tooltip: 'Settings',
-                              onTap: () => _navigateToIndex(context, 4),
+                              onTap: () => _navigateToIndex(context, 5),
                             ),
                           ],
                         ),
@@ -1022,30 +1014,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: AppColors.primary.withValues(alpha: 0.7)),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: () => _openAttendance(context),
-                        icon: Icon(
-                          Icons.verified_user_rounded,
-                          color: _ink.withValues(alpha: 0.85),
-                        ),
-                        label: Text(
-                          'Attendance & Leave',
-                          style: TextStyle(
-                            color: _ink.withValues(alpha: 0.9),
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(
-                            color: _ink.withValues(alpha: 0.2),
-                          ),
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16),

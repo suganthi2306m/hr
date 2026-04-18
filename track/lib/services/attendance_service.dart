@@ -102,8 +102,16 @@ class AttendanceService {
     _api.setAuthToken(token);
   }
 
-  Future<List<AttendanceRecord>> fetchHistory() async {
+  /// When [from] and [to] are set, loads that date range (paginates server-side up to 200 rows per page).
+  /// When omitted, uses the default `/attendance/history` behaviour (recent page, same as before).
+  Future<List<AttendanceRecord>> fetchHistory({
+    DateTime? from,
+    DateTime? to,
+  }) async {
     await _setAuthToken();
+    if (from != null && to != null) {
+      return _fetchHistoryDateRange(from, to);
+    }
     final res = await _api.request<Map<String, dynamic>>(
       '/attendance/history',
       method: 'GET',
@@ -113,6 +121,39 @@ class AttendanceService {
         .whereType<Map<String, dynamic>>()
         .map(AttendanceRecord.fromJson)
         .toList();
+  }
+
+  Future<List<AttendanceRecord>> _fetchHistoryDateRange(
+    DateTime from,
+    DateTime to,
+  ) async {
+    final out = <AttendanceRecord>[];
+    var page = 1;
+    while (true) {
+      final res = await _api.request<Map<String, dynamic>>(
+        '/attendance/history',
+        method: 'GET',
+        queryParameters: <String, dynamic>{
+          'from': from.toIso8601String(),
+          'to': to.toIso8601String(),
+          'limit': 200,
+          'page': page,
+        },
+      );
+      final list = (res.data?['data'] as List?) ?? const [];
+      final batch = list
+          .whereType<Map<String, dynamic>>()
+          .map(AttendanceRecord.fromJson)
+          .toList();
+      out.addAll(batch);
+      final pag = res.data?['pagination'];
+      final totalPages = pag is Map
+          ? (pag['pages'] as num?)?.toInt() ?? 1
+          : 1;
+      if (page >= totalPages || batch.length < 200) break;
+      page++;
+    }
+    return out;
   }
 
   Future<List<LeaveRequestRecord>> fetchLeaveStatus() async {

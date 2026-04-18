@@ -260,7 +260,6 @@ function FieldTaskDetailsPage() {
                 <th className="pr-3">Lng</th>
                 <th className="pr-3">Address</th>
                 <th className="pr-3">Status</th>
-                <th className="pr-3">Movement</th>
                 <th className="pr-3">Exit</th>
                 <th className="pr-3">Battery</th>
               </tr>
@@ -273,14 +272,13 @@ function FieldTaskDetailsPage() {
                   <td className="pr-3">{row.longitude ?? '-'}</td>
                   <td className="pr-3">{row.address || '-'}</td>
                   <td className="pr-3">{row.status || '-'}</td>
-                  <td className="pr-3">{row.movementType || '-'}</td>
                   <td className="pr-3">{row.exitStatus || row.exitReason || '-'}</td>
                   <td className="pr-3">{row.batteryPercent ?? '-'}</td>
                 </tr>
               ))}
               {locationRows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-3 text-slate-500">
+                  <td colSpan={7} className="py-3 text-slate-500">
                     No locations found for this task.
                   </td>
                 </tr>

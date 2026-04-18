@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import apiClient from '../api/client';
+import { formatAttendanceTimeShort } from '../utils/attendanceTime';
 import UiSelect from '../components/common/UiSelect';
 import { USER_ROLES } from '../constants/rbac';
 
@@ -385,8 +386,8 @@ function UserDetailsPage() {
                   ) : null}
                   {att ? (
                     <div className="mt-1 space-y-0.5 text-[11px] text-slate-700">
-                      <p>In: {att.checkInAt ? dayjs(att.checkInAt).format('hh:mm A') : '-'}</p>
-                      <p>Out: {att.checkOutAt ? dayjs(att.checkOutAt).format('hh:mm A') : '-'}</p>
+                      <p>In: {att.checkInAt ? formatAttendanceTimeShort(att.checkInAt) : '-'}</p>
+                      <p>Out: {att.checkOutAt ? formatAttendanceTimeShort(att.checkOutAt) : '-'}</p>
                     </div>
                   ) : null}
                 </div>

@@ -5,7 +5,7 @@ import {
   formatAttendanceClock,
   localWallClockToEpochMs,
   wallClockPartsFromStoredUtc,
-} from '../utils/attendanceDateTime';
+} from '../utils/attendanceTime';
 
 const STATUS = {
   PRESENT: 'Present',
