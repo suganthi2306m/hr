@@ -38,9 +38,36 @@ function parseCorsOrigins() {
   return list.length ? list : ['http://localhost:5173'];
 }
 
+/** Vercel project URLs (production + previews) without listing each in CORS_ORIGIN. */
+function isCustomerconnectVercelOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return false;
+  try {
+    const { protocol, hostname } = new URL(origin);
+    if (protocol !== 'https:') return false;
+    return hostname.endsWith('.vercel.app') && hostname.startsWith('customerconnect');
+  } catch {
+    return false;
+  }
+}
+
+const parsedCorsOrigins = parseCorsOrigins();
+// eslint-disable-next-line no-console
+console.log('[cors] allow-list from CORS_ORIGIN:', parsedCorsOrigins.join(' | ') || '(none)');
+
 app.use(
   cors({
-    origin: parseCorsOrigins(),
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (parsedCorsOrigins.includes(origin)) return callback(null, origin);
+      if (isCustomerconnectVercelOrigin(origin)) {
+        // eslint-disable-next-line no-console
+        console.log('[cors] allowing Vercel host:', origin);
+        return callback(null, origin);
+      }
+      // eslint-disable-next-line no-console
+      console.warn('[cors] blocked Origin (add to CORS_ORIGIN on Render):', origin);
+      return callback(null, false);
+    },
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
