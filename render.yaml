@@ -1,6 +1,7 @@
 # Render Blueprint: https://render.com/docs/blueprint-spec
-# After connecting this repo in Render, use "Apply" from the Blueprint tab
-# or create each service manually with the same rootDir / commands.
+# APIs only — deploy the Vite app (`web/`) on Vercel (see web/vercel.json).
+# In Render: New → Blueprint → connect repo → apply, or create two Web Services
+# with the same rootDir / build / start as below.
 
 services:
   # Mobile app API (Express) — folder: backend
@@ -20,15 +21,3 @@ services:
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
-
-  # Web frontend (Vite + React) — folder: web
-  - type: web
-    name: customerconnect-web
-    runtime: static
-    rootDir: web
-    buildCommand: npm install && npm run build
-    staticPublishPath: ./web/dist
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
