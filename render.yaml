@@ -1,0 +1,34 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# After connecting this repo in Render, use "Apply" from the Blueprint tab
+# or create each service manually with the same rootDir / commands.
+
+services:
+  # Mobile app API (Express) — folder: backend
+  - type: web
+    name: customerconnect-mobile-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+
+  # Web dashboard API — folder: web_backend
+  - type: web
+    name: customerconnect-web-api
+    runtime: node
+    rootDir: web_backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+
+  # Web frontend (Vite + React) — folder: web
+  - type: web
+    name: customerconnect-web
+    runtime: static
+    rootDir: web
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./web/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

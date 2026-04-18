@@ -1,0 +1,566 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useOutletContext } from 'react-router-dom';
+import apiClient from '../api/client';
+import LocationLoadingIndicator from '../components/common/LocationLoadingIndicator';
+import SlideOverPanel from '../components/common/SlideOverPanel';
+import UiSelect from '../components/common/UiSelect';
+import { PERMISSION_PRESETS, USER_ROLES } from '../constants/rbac';
+import { downloadUsersExportXlsx } from '../utils/usersExcelImport';
+
+const defaultPerms = () =>
+  PERMISSION_PRESETS.reduce((acc, p) => {
+    acc[p.key] = true;
+    return acc;
+  }, {});
+
+function getInitialForm() {
+  return {
+    name: '',
+    email: '',
+    password: '',
+    phone: '',
+    role: 'field_agent',
+    isActive: true,
+    permissions: defaultPerms(),
+    kycStatus: '',
+    kycNotes: '',
+  };
+}
+
+function UsersPage() {
+  const navigate = useNavigate();
+  const { globalSearch, setGlobalSearch } = useOutletContext() || {};
+  const [users, setUsers] = useState([]);
+  const [form, setForm] = useState(() => getInitialForm());
+  const [editingId, setEditingId] = useState('');
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const loadUsers = async () => {
+    setLoading(true);
+    try {
+      const { data } = await apiClient.get('/users');
+      setUsers(data.items || []);
+    } catch (apiError) {
+      setError(apiError.response?.data?.message || 'Unable to load users.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  const filteredUsers = useMemo(() => {
+    const search = typeof globalSearch === 'string' ? globalSearch : '';
+    const term = search.trim().toLowerCase();
+    return users.filter((user) => {
+      if (statusFilter === 'active' && !user.isActive) return false;
+      if (statusFilter === 'inactive' && user.isActive) return false;
+      if (!term) return true;
+      return [user.name, user.email, user.phone, user.role, user.companyId?.name].some((value) =>
+        String(value || '')
+          .toLowerCase()
+          .includes(term),
+      );
+    });
+  }, [globalSearch, users, statusFilter]);
+  const allSelected = filteredUsers.length > 0 && filteredUsers.every((u) => selectedIds.includes(String(u._id)));
+
+  useEffect(() => {
+    if (typeof setGlobalSearch !== 'function') return undefined;
+    return () => setGlobalSearch('');
+  }, [setGlobalSearch]);
+
+  const resetForm = () => {
+    setForm(getInitialForm());
+    setEditingId('');
+    setIsPanelOpen(false);
+    setShowPassword(false);
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const passwordValue = String(form.password || '').trim();
+      if (!editingId && !passwordValue) {
+        setError('Password is required while creating a user.');
+        setSaving(false);
+        return;
+      }
+
+      const payload = {
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        phone: form.phone.trim(),
+        role: form.role,
+        isActive: form.isActive,
+        permissions: form.permissions || {},
+        kycStatus: form.kycStatus || '',
+        kycNotes: form.kycNotes || '',
+      };
+      if (passwordValue) {
+        payload.password = passwordValue;
+      }
+
+      if (editingId) {
+        await apiClient.put(`/users/${editingId}`, payload);
+        setMessage('User updated successfully.');
+      } else {
+        await apiClient.post('/users', payload);
+        setMessage('User created successfully.');
+      }
+      resetForm();
+      await loadUsers();
+    } catch (apiError) {
+      setError(apiError.response?.data?.message || 'Unable to save user.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startEdit = (user) => {
+    setEditingId(user._id);
+    const base = defaultPerms();
+    const merged = { ...base, ...(user.permissions && typeof user.permissions === 'object' ? user.permissions : {}) };
+    setForm({
+      name: user.name || '',
+      email: user.email || '',
+      password: '',
+      phone: user.phone || '',
+      role: user.role === 'field_user' ? 'field_agent' : user.role === 'supervisor' ? 'manager' : user.role || 'field_agent',
+      isActive: Boolean(user.isActive),
+      permissions: merged,
+      kycStatus: user.kycStatus || '',
+      kycNotes: user.kycNotes || '',
+    });
+    setError('');
+    setMessage('');
+    setIsPanelOpen(true);
+    setShowPassword(false);
+  };
+
+  const startCreate = () => {
+    setForm(getInitialForm());
+    setEditingId('');
+    setError('');
+    setMessage('');
+    setIsPanelOpen(true);
+  };
+
+  const toggleActive = async (user) => {
+    setError('');
+    setMessage('');
+    try {
+      await apiClient.put(`/users/${user._id}`, { isActive: !user.isActive });
+      setMessage(`User ${user.isActive ? 'deactivated' : 'activated'} successfully.`);
+      await loadUsers();
+    } catch (apiError) {
+      setError(apiError.response?.data?.message || 'Unable to update user status.');
+    }
+  };
+
+  const onToggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds((old) => old.filter((id) => !filteredUsers.some((u) => String(u._id) === id)));
+      return;
+    }
+    setSelectedIds((old) => {
+      const next = new Set(old);
+      filteredUsers.forEach((u) => next.add(String(u._id)));
+      return [...next];
+    });
+  };
+
+  const onToggleRow = (id) => {
+    setSelectedIds((old) => (old.includes(id) ? old.filter((x) => x !== id) : [...old, id]));
+  };
+
+  const bulkSetActiveState = async (isActive) => {
+    const selectedUsers = users.filter((u) => selectedIds.includes(String(u._id)));
+    if (!selectedUsers.length) {
+      window.alert('Select users first.');
+      return;
+    }
+    setError('');
+    setMessage('');
+    let done = 0;
+    for (const u of selectedUsers) {
+      try {
+        await apiClient.put(`/users/${u._id}`, {
+          name: u.name,
+          email: u.email,
+          phone: u.phone || '',
+          role: u.role || 'field_agent',
+          isActive,
+          permissions: u.permissions || {},
+          kycStatus: u.kycStatus || '',
+          kycNotes: u.kycNotes || '',
+        });
+        done += 1;
+      } catch {
+        /* keep processing */
+      }
+    }
+    setSelectedIds([]);
+    await loadUsers();
+    setMessage(`${done} user(s) updated.`);
+  };
+
+  const bulkDelete = async () => {
+    const selectedUsers = users.filter((u) => selectedIds.includes(String(u._id)));
+    if (!selectedUsers.length) {
+      window.alert('Select users first.');
+      return;
+    }
+    if (!window.confirm(`Delete ${selectedUsers.length} selected user(s)?`)) return;
+    setError('');
+    setMessage('');
+    let done = 0;
+    for (const u of selectedUsers) {
+      try {
+        await apiClient.delete(`/users/${u._id}`);
+        done += 1;
+      } catch {
+        /* keep processing */
+      }
+    }
+    setSelectedIds([]);
+    await loadUsers();
+    setMessage(`${done} user(s) deleted.`);
+  };
+
+  const removeUser = async (user) => {
+    const confirmed = window.confirm(`Delete user "${user.name}"?`);
+    if (!confirmed) {
+      return;
+    }
+    setError('');
+    setMessage('');
+    try {
+      await apiClient.delete(`/users/${user._id}`);
+      setMessage('User deleted successfully.');
+      if (editingId === user._id) {
+        resetForm();
+      }
+      await loadUsers();
+    } catch (apiError) {
+      setError(apiError.response?.data?.message || 'Unable to delete user.');
+    }
+  };
+
+  return (
+    <section className="space-y-4">
+      <div className="flux-card p-4 shadow-panel-lg">
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h4 className="text-base font-semibold text-dark">All users</h4>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:justify-end">
+            <button type="button" onClick={() => navigate('/dashboard/users/import')} className="btn-primary">
+              Import
+            </button>
+            <button type="button" onClick={() => void downloadUsersExportXlsx(filteredUsers)} className="btn-primary">
+              Export
+            </button>
+            <button type="button" onClick={startCreate} className="btn-primary gap-2">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Create user
+            </button>
+          </div>
+        </div>
+
+        {error && <p className="alert-error mb-3">{error}</p>}
+        {message && <p className="alert-success mb-3">{message}</p>}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">Status</span>
+          <div className="inline-flex rounded-full border border-primary/50 bg-flux-panel p-0.5">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'active', label: 'Active' },
+              { id: 'inactive', label: 'Inactive' },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setStatusFilter(opt.id)}
+                className={`rounded-full px-3 py-1.5 text-sm font-semibold transition ${
+                  statusFilter === opt.id ? 'bg-white text-dark shadow-sm' : 'text-slate-600 hover:text-dark'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <span className="whitespace-nowrap text-sm text-slate-500">
+            {filteredUsers.length} of {users.length} shown
+          </span>
+        </div>
+        {!!selectedIds.length && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-flux-panel px-3 py-2">
+            <span className="text-sm font-semibold text-dark">{selectedIds.length} selected</span>
+            <button type="button" className="btn-secondary text-xs" onClick={() => void bulkSetActiveState(true)}>
+              Set Active
+            </button>
+            <button type="button" className="btn-secondary text-xs" onClick={() => void bulkSetActiveState(false)}>
+              Set Inactive
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center rounded-lg border border-primary bg-primary/10 px-3 py-2 text-xs font-semibold text-dark hover:bg-primary/20"
+              onClick={() => void bulkDelete()}
+            >
+              Delete selected
+            </button>
+          </div>
+        )}
+
+        {loading ? (
+          <LocationLoadingIndicator label="Loading users..." className="py-3" />
+        ) : (
+          <div className="overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-slate-500">
+                  <th className="w-10 py-2">
+                    <input type="checkbox" checked={allSelected} onChange={onToggleSelectAll} aria-label="Select all users" />
+                  </th>
+                  <th className="py-2">Name</th>
+                  <th>Email</th>
+                  <th>Phone</th>
+                  <th>Role</th>
+                  <th>Company</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredUsers.map((user) => (
+                  <tr
+                    key={user._id}
+                    className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
+                    onClick={() => navigate(`/dashboard/users/${user._id}`)}
+                  >
+                    <td className="py-2" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(String(user._id))}
+                        onChange={() => onToggleRow(String(user._id))}
+                        aria-label={`Select ${user.name}`}
+                      />
+                    </td>
+                    <td className="py-2 font-medium text-dark">{user.name}</td>
+                    <td>{user.email}</td>
+                    <td>{user.phone || '-'}</td>
+                    <td className="capitalize">{(user.role || '-').replace(/_/g, ' ')}</td>
+                    <td>{user.companyId?.name || '-'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleActive(user);
+                        }}
+                        className={`inline-flex h-5 w-9 items-center rounded-full border p-0.5 transition ${
+                          user.isActive ? 'border-primary bg-primary' : 'border-primary/50 bg-primary/15'
+                        }`}
+                        title={user.isActive ? 'Set inactive' : 'Set active'}
+                        aria-label={user.isActive ? 'Set user inactive' : 'Set user active'}
+                      >
+                        <span
+                          className={`h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                            user.isActive ? 'translate-x-4' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startEdit(user);
+                          }}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 text-dark hover:bg-neutral-100"
+                          title="Edit user"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeUser(user);
+                          }}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-primary bg-primary/10 text-dark hover:bg-primary/20"
+                          title="Delete user"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                            <path d="M3 6h18" />
+                            <path d="M8 6V4h8v2" />
+                            <path d="M19 6l-1 14H6L5 6" />
+                            <path d="M10 11v6M14 11v6" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {!filteredUsers.length && (
+                  <tr>
+                    <td className="py-4 text-slate-500" colSpan={8}>
+                      No users found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <SlideOverPanel
+        open={isPanelOpen}
+        onClose={resetForm}
+        title={editingId ? 'Edit user' : 'Create user'}
+        description="Manage all field users from one place."
+      >
+        <form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
+          <div className="form-field md:col-span-1">
+            <label htmlFor="user-form-name" className="form-label-muted">
+              Full name
+            </label>
+            <input
+              id="user-form-name"
+              value={form.name}
+              onChange={(e) => setForm((old) => ({ ...old, name: e.target.value }))}
+              placeholder="e.g. Priya Sharma"
+              className="form-input"
+              autoComplete="name"
+              required
+            />
+          </div>
+          <div className="form-field md:col-span-1">
+            <label htmlFor="user-form-email" className="form-label-muted">
+              Email
+            </label>
+            <input
+              id="user-form-email"
+              type="email"
+              value={form.email}
+              onChange={(e) => setForm((old) => ({ ...old, email: e.target.value }))}
+              placeholder="name@company.com"
+              className="form-input"
+              autoComplete="email"
+              required
+            />
+          </div>
+          <div className="form-field md:col-span-2">
+            <label htmlFor="user-form-password" className="form-label-muted">
+              {editingId ? 'New password (optional)' : 'Password'}
+            </label>
+            <div className="relative">
+              <input
+                id="user-form-password"
+                type={showPassword ? 'text' : 'password'}
+                value={form.password}
+                onChange={(e) => setForm((old) => ({ ...old, password: e.target.value }))}
+                placeholder={editingId ? 'Leave blank to keep current' : 'Minimum 6 characters'}
+                className="form-input pr-11"
+                autoComplete="new-password"
+                required={!editingId}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((old) => !old)}
+                className="absolute right-2 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+              {showPassword ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                  <path d="m3 3 18 18" />
+                  <path d="M10.7 10.7a3 3 0 0 0 4.2 4.2" />
+                  <path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c5 0 9.3 3.1 11 8-1 2.7-2.9 4.8-5.4 6.2" />
+                  <path d="M6.6 6.6C4.3 8 2.6 9.8 1.6 12c1.7 4.9 6 8 10.4 8 1.5 0 2.9-.3 4.2-.8" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              )}
+              </button>
+            </div>
+          </div>
+          <div className="form-field">
+            <label htmlFor="user-form-phone" className="form-label-muted">
+              Phone
+            </label>
+            <input
+              id="user-form-phone"
+              value={form.phone}
+              onChange={(e) => setForm((old) => ({ ...old, phone: e.target.value }))}
+              placeholder="+91 …"
+              className="form-input"
+              autoComplete="tel"
+            />
+          </div>
+          <div className="form-field">
+            <label htmlFor="user-form-role" className="form-label-muted">
+              Role
+            </label>
+            <UiSelect
+              id="user-form-role"
+              className="capitalize"
+              menuClassName="capitalize"
+              value={form.role}
+              onChange={(next) => setForm((old) => ({ ...old, role: next }))}
+              options={USER_ROLES.map((r) => ({ value: r.value, label: r.label }))}
+            />
+          </div>
+          <label className="md:col-span-2 flex cursor-pointer items-center gap-3 rounded-xl border border-neutral-200/80 bg-flux-panel px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-neutral-300">
+            <input
+              type="checkbox"
+              checked={form.isActive}
+              onChange={(e) => setForm((old) => ({ ...old, isActive: e.target.checked }))}
+              className="form-checkbox"
+            />
+            Account is active
+          </label>
+          {editingId && (
+            <p className="md:col-span-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
+              Leave password empty to keep the current password.
+            </p>
+          )}
+          <div className="md:col-span-2 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
+            {editingId && (
+              <button type="button" onClick={resetForm} className="btn-secondary">
+                Cancel
+              </button>
+            )}
+            <button type="submit" disabled={saving} className="btn-primary disabled:cursor-not-allowed">
+              {saving ? 'Saving...' : editingId ? 'Update user' : 'Create user'}
+            </button>
+          </div>
+        </form>
+      </SlideOverPanel>
+    </section>
+  );
+}
+
+export default UsersPage;

@@ -1,0 +1,41 @@
+# User-requested: do not version local selfie assets
+selfie/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+**/firebase-service-account.json
+**/firebase-adminsdk*.json
+
+# Large / reproducible ML caches
+**/.deepface/
+
+# Obvious local exports (do not ship personal data)
+**/customer_data.json
+**/salary_breakdown*.txt
+
+# Dependencies
+**/node_modules/
+
+# Python (e.g. backend/face_verify)
+**/venv/
+**/.venv/
+**/__pycache__/
+*.py[cod]
+
+# Android / JVM heap dumps (never commit)
+*.hprof
+
+# Logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+
+# Build outputs (repo-root safety net; subprojects may add more)
+**/dist/
+**/build/
