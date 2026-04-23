@@ -36,8 +36,48 @@ function isDevLocalFrontendOrigin(origin) {
   }
 }
 
+/**
+ * Vercel project name(s) (the first segment of *.vercel.app), comma-separated.
+ * Allows production `https://<slug>.vercel.app` and previews `https://<slug>-….vercel.app`
+ * without listing each URL in CORS_ORIGIN.
+ * When unset, keeps legacy `customerconnect` and LiveTrack HR web `hr-gamma-two`.
+ */
+function parseVercelProjectSlugs() {
+  const raw = process.env.CORS_VERCEL_SLUGS;
+  if (raw != null && String(raw).trim() !== '') {
+    return String(raw)
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return ['customerconnect', 'hr-gamma-two'];
+}
+
+function isAllowedVercelProjectOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return false;
+  let hostname;
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== 'https:') return false;
+    hostname = u.hostname.toLowerCase();
+    if (!hostname.endsWith('.vercel.app')) return false;
+  } catch {
+    return false;
+  }
+  const slugs = parseVercelProjectSlugs();
+  return slugs.some((slug) => {
+    if (!slug) return false;
+    return (
+      hostname === `${slug}.vercel.app` ||
+      (hostname.startsWith(`${slug}-`) && hostname.endsWith('.vercel.app'))
+    );
+  });
+}
+
 module.exports = {
   parseCorsOrigins,
+  parseVercelProjectSlugs,
   isProduction,
   isDevLocalFrontendOrigin,
+  isAllowedVercelProjectOrigin,
 };

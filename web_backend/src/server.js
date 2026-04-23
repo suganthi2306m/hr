@@ -21,7 +21,9 @@ const {
 const { startLocationRealtime } = require('./services/locationRealtimeService');
 const {
   parseCorsOrigins,
+  parseVercelProjectSlugs,
   isDevLocalFrontendOrigin,
+  isAllowedVercelProjectOrigin,
 } = require('./utils/corsAllowlist');
 
 /** Log each auto-allowed dev Origin once (avoids spam on every preflight). */
@@ -46,21 +48,11 @@ const limiter = rateLimit({
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
-/** Vercel project URLs (production + previews) without listing each in CORS_ORIGIN. */
-function isCustomerconnectVercelOrigin(origin) {
-  if (!origin || typeof origin !== 'string') return false;
-  try {
-    const { protocol, hostname } = new URL(origin);
-    if (protocol !== 'https:') return false;
-    return hostname.endsWith('.vercel.app') && hostname.startsWith('customerconnect');
-  } catch {
-    return false;
-  }
-}
-
 const parsedCorsOrigins = parseCorsOrigins();
 // eslint-disable-next-line no-console
 console.log('[cors] allow-list from CORS_ORIGIN:', parsedCorsOrigins.join(' | ') || '(none)');
+// eslint-disable-next-line no-console
+console.log('[cors] Vercel project slugs (CORS_VERCEL_SLUGS or default):', parseVercelProjectSlugs().join(' | '));
 
 /** Payment provider webhooks need raw body for signature verification (Razorpay). */
 app.use('/api/subscription/webhook', express.raw({ type: 'application/json' }), subscriptionWebhookRoutes);
@@ -70,7 +62,7 @@ app.use(
     origin(origin, callback) {
       if (!origin) return callback(null, true);
       if (parsedCorsOrigins.includes(origin)) return callback(null, origin);
-      if (isCustomerconnectVercelOrigin(origin)) {
+      if (isAllowedVercelProjectOrigin(origin)) {
         // eslint-disable-next-line no-console
         console.log('[cors] allowing Vercel host:', origin);
         return callback(null, origin);

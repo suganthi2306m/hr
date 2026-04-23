@@ -1,10 +1,14 @@
 // hrms/lib/config/constants.dart
 class AppConstants {
-  /// Default backend for physical devices on same Wi-Fi.
-  /// Override at build/run:
-  /// flutter run --dart-define=APP_API_BASE_URL=http://<your-laptop-ip>:9001/api
- // static const String _defaultApiBaseUrl = 'https://customerconnect-mobile-api.onrender.com/api';
- static const String _defaultApiBaseUrl = 'http://192.168.1.33:9001/api';
+  /// Default app (mobile) API — Render `backend` service.
+  /// Override: `flutter run --dart-define=APP_API_BASE_URL=...`
+  static const String _defaultApiBaseUrl =
+      'https://hr-app-tmi3.onrender.com/api';
+
+  /// Default web HRMS API — Render `web_backend` service (interaction, admin parity with web).
+  /// Override: `flutter run --dart-define=APP_WEB_API_BASE_URL=...`
+  static const String _defaultWebApiBaseUrl =
+      'https://hr-se1q.onrender.com/api';
 
   /// General app API (attendance, geo, profile, …).
   static const String baseUrl = String.fromEnvironment(
@@ -12,12 +16,10 @@ class AppConstants {
     defaultValue: _defaultApiBaseUrl,
   );
 
-  /// Production / web HRMS API host. By default follows [baseUrl].
-  /// Override when needed:
-  /// flutter run --dart-define=APP_WEB_API_BASE_URL=http://<host>:9001/api
+  /// Production / web HRMS API host.
   static const String webBaseUrl = String.fromEnvironment(
     'APP_WEB_API_BASE_URL',
-    defaultValue: baseUrl,
+    defaultValue: _defaultWebApiBaseUrl,
   );
 
   /// When **true** (default): Interaction REST + Socket use [webBaseUrl] like the web.
