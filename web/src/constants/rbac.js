@@ -1,8 +1,16 @@
 export const USER_ROLES = [
   { value: 'admin', label: 'Admin' },
   { value: 'manager', label: 'Manager' },
-  { value: 'field_agent', label: 'Field agent' },
+  { value: 'field_agent', label: 'Employee' },
 ];
+
+/** Display label for a stored role value (matches USER_ROLES labels). */
+export function roleLabel(role) {
+  const r = USER_ROLES.find((x) => x.value === role);
+  if (r) return r.label;
+  const s = String(role || '').trim();
+  return s ? s.replace(/_/g, ' ') : '—';
+}
 
 export const PERMISSION_PRESETS = [
   { key: 'tasks.view', label: 'View tasks' },

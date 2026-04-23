@@ -55,6 +55,12 @@ class AttendanceRecord {
     this.leaveKind,
     this.lateFlag,
     this.earlyExitFlag,
+    this.shiftId,
+    this.shiftName,
+    this.shiftStartTime,
+    this.shiftEndTime,
+    this.dayStatus,
+    this.source,
   });
 
   final String id;
@@ -75,6 +81,12 @@ class AttendanceRecord {
   final String? leaveKind;
   final bool? lateFlag;
   final bool? earlyExitFlag;
+  final String? shiftId;
+  final String? shiftName;
+  final String? shiftStartTime;
+  final String? shiftEndTime;
+  final String? dayStatus;
+  final String? source;
 
   factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
     final checkIn = DateDisplayUtil.parseFromApiAsLocal(json['checkInTime']) ??
@@ -110,6 +122,12 @@ class AttendanceRecord {
       leaveKind: json['leaveKind']?.toString(),
       lateFlag: json['lateFlag'] is bool ? json['lateFlag'] as bool : null,
       earlyExitFlag: json['earlyExitFlag'] is bool ? json['earlyExitFlag'] as bool : null,
+      shiftId: json['shiftId']?.toString(),
+      shiftName: json['shiftName']?.toString(),
+      shiftStartTime: json['shiftStartTime']?.toString(),
+      shiftEndTime: json['shiftEndTime']?.toString(),
+      dayStatus: json['dayStatus']?.toString(),
+      source: json['source']?.toString(),
     );
   }
 }
@@ -132,12 +150,14 @@ class LeaveRequestRecord {
   final String status;
 
   factory LeaveRequestRecord.fromJson(Map<String, dynamic> json) {
+    final fromRaw = json['startDate'] ?? json['fromDate'];
+    final toRaw = json['endDate'] ?? json['toDate'] ?? fromRaw;
     return LeaveRequestRecord(
       id: json['_id']?.toString() ?? '',
       leaveType: json['leaveType']?.toString() ?? '',
-      fromDate: DateDisplayUtil.parseFromApiAsLocal(json['fromDate']) ??
+      fromDate: DateDisplayUtil.parseFromApiAsLocal(fromRaw) ??
           DateTime.now(),
-      toDate: DateDisplayUtil.parseFromApiAsLocal(json['toDate']) ??
+      toDate: DateDisplayUtil.parseFromApiAsLocal(toRaw) ??
           DateTime.now(),
       reason: json['reason']?.toString() ?? '',
       status: json['status']?.toString() ?? 'PENDING',

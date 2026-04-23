@@ -1,6 +1,7 @@
 const Customer = require('../models/Customer');
 const Company = require('../models/Company');
 const Task = require('../models/Task');
+const CustomerFollowUp = require('../models/CustomerFollowUp');
 
 let customerStatusMigrationPromise;
 
@@ -404,6 +405,51 @@ async function deleteCustomer(req, res, next) {
   }
 }
 
+async function listCustomerFollowUps(req, res, next) {
+  try {
+    const company = await getCompanyIdForAdmin(req.admin._id);
+    if (!company?._id) return res.status(400).json({ message: 'Complete company setup to manage customers.' });
+    const cust = await Customer.findOne({ _id: req.params.id, companyId: company._id }).select('_id').lean();
+    if (!cust) return res.status(404).json({ message: 'Customer not found.' });
+    const items = await CustomerFollowUp.find({ companyId: company._id, customerId: cust._id })
+      .sort({ createdAt: -1 })
+      .populate('createdByAdminId', 'name email')
+      .populate('createdByUserId', 'name email')
+      .lean();
+    return res.json({ items });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function addCustomerFollowUp(req, res, next) {
+  try {
+    const company = await getCompanyIdForAdmin(req.admin._id);
+    if (!company?._id) return res.status(400).json({ message: 'Complete company setup to manage customers.' });
+    const cust = await Customer.findOne({ _id: req.params.id, companyId: company._id }).select('_id').lean();
+    if (!cust) return res.status(404).json({ message: 'Customer not found.' });
+    const note = String(req.body.note || '').trim();
+    if (!note) return res.status(400).json({ message: 'Follow-up note is required.' });
+    const actionType = ['call', 'visit', 'message', 'other'].includes(String(req.body.actionType || '').toLowerCase())
+      ? String(req.body.actionType).toLowerCase()
+      : 'call';
+    const nextFollowUpAt = req.body.nextFollowUpAt ? new Date(req.body.nextFollowUpAt) : null;
+    const row = await CustomerFollowUp.create({
+      companyId: company._id,
+      customerId: cust._id,
+      note,
+      actionType,
+      nextFollowUpAt: nextFollowUpAt && !Number.isNaN(nextFollowUpAt.getTime()) ? nextFollowUpAt : null,
+      createdByAdminId: req.admin._id,
+      createdByUserId: null,
+      history: [{ note, actionType, nextFollowUpAt, changedByAdminId: req.admin._id, changedAt: new Date() }],
+    });
+    return res.status(201).json({ item: row });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   listCustomers,
   getCustomerById,
@@ -412,4 +458,6 @@ module.exports = {
   updateCustomer,
   deleteCustomer,
   nearbyCustomers,
+  listCustomerFollowUps,
+  addCustomerFollowUp,
 };

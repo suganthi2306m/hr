@@ -1,5 +1,8 @@
 const Attendance = require('../models/Attendance');
 const LeaveRequest = require('../models/LeaveRequest');
+const Company = require('../models/Company');
+const User = require('../models/User');
+const mongoose = require('mongoose');
 const cloudinaryAtt = require('../services/cloudinaryAttendanceUpload');
 
 function startOfDay(date = new Date()) {
@@ -39,6 +42,380 @@ function statusFromDuration(minutes) {
   if (minutes >= 8 * 60) return 'PRESENT';
   if (minutes >= 4 * 60) return 'HALF_DAY';
   return 'PENDING';
+}
+
+function toTrimmedString(v) {
+  if (v == null) return '';
+  const s = String(v).trim();
+  return s;
+}
+
+function toFiniteNumber(v) {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeObjectIdString(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v.trim();
+  if (typeof v === 'object') {
+    if (v._id) return String(v._id).trim();
+    if (v.id) return String(v.id).trim();
+    if (v.$oid) return String(v.$oid).trim();
+  }
+  return String(v).trim();
+}
+
+/**
+ * Full company document from Mongo (no Mongoose strict strip).
+ * HRMS stores org setup under `orgSetup` (shifts, branches) which is not on the Company schema,
+ * so Company.findById() drops those fields and shift meta becomes empty.
+ * Tries model collection name first, then `companies`, then `businesses`.
+ */
+async function loadCompanyRawById(companyId) {
+  const idStr = normalizeObjectIdString(companyId);
+  if (!idStr) return null;
+  let oid;
+  try {
+    oid = new mongoose.Types.ObjectId(idStr);
+  } catch (_) {
+    return null;
+  }
+  const db = Company.db;
+  const modelColl = Company.collection.collectionName;
+  const candidates = [modelColl, 'companies', 'businesses'];
+  const seen = new Set();
+  for (const collName of candidates) {
+    if (!collName || seen.has(collName)) continue;
+    seen.add(collName);
+    try {
+      const doc = await db.collection(collName).findOne({ _id: oid });
+      if (doc) return doc;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function isBranchGeofenceDisabled(g) {
+  return g && Object.prototype.hasOwnProperty.call(g, 'enabled') && g.enabled === false;
+}
+
+async function resolveUserBranchGeofence(user) {
+  const branchId = normalizeObjectIdString(user?.branchId);
+  if (!branchId) return null;
+
+  // Prefer dedicated branches collection when present.
+  try {
+    const branchDoc = await Company.db.collection('branches').findOne({ _id: new mongoose.Types.ObjectId(branchId) });
+    if (branchDoc) {
+      const g = branchDoc.geofence || {};
+      if (isBranchGeofenceDisabled(g)) return null;
+      const lat = toFiniteNumber(g.latitude ?? g.lat ?? branchDoc.latitude);
+      const lng = toFiniteNumber(g.longitude ?? g.lng ?? branchDoc.longitude);
+      const radius = toFiniteNumber(g.radius ?? g.radiusM ?? branchDoc.radius) ?? 100;
+      if (lat != null && lng != null) {
+        return {
+          latitude: lat,
+          longitude: lng,
+          radius,
+          branchName: toTrimmedString(branchDoc.name || branchDoc.branchName),
+        };
+      }
+    }
+  } catch (_) {
+    // ignore and fallback
+  }
+
+  // Fallback: embedded company branches array (supports both `branches` and `orgSetup.branches`).
+  try {
+    const company = await loadCompanyRawById(user.companyId);
+    const branches = Array.isArray(company?.branches)
+      ? company.branches
+      : Array.isArray(company?.orgSetup?.branches)
+        ? company.orgSetup.branches
+        : [];
+    const branch = branches.find((b) => normalizeObjectIdString(b?._id) === branchId);
+    if (!branch) return null;
+    const g = branch.geofence || {};
+    if (isBranchGeofenceDisabled(g)) return null;
+    const lat = toFiniteNumber(g.latitude ?? g.lat ?? branch.latitude);
+    const lng = toFiniteNumber(g.longitude ?? g.lng ?? branch.longitude);
+    const radius = toFiniteNumber(g.radius ?? g.radiusM ?? branch.radius) ?? 100;
+    if (lat != null && lng != null) {
+      return {
+        latitude: lat,
+        longitude: lng,
+        radius,
+        branchName: toTrimmedString(branch.name || branch.branchName),
+      };
+    }
+  } catch (_) {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * When user.attendanceGeofenceEnabled: enforce location within branch geofence (or legacy officeLocation).
+ * When false: no server-side distance check (anywhere).
+ * @param {{ punchLabel?: string }} opts punchLabel e.g. "Check-in" / "Check-out" for error messages
+ * @returns {{ ok: true, skipped?: boolean, ctx: { geofenceDistanceM, geofenceSource, geofenceCenterLat, geofenceCenterLng, geofenceRadius } } | { ok: false, status: number, message: string, code: string }}
+ */
+async function assertWithinAttendanceGeofence(user, lat, lng, opts = {}) {
+  const punchLabel = toTrimmedString(opts.punchLabel) || 'Attendance';
+  if (user?.attendanceGeofenceEnabled !== true) {
+    return {
+      ok: true,
+      skipped: true,
+      ctx: {
+        geofenceDistanceM: null,
+        geofenceSource: null,
+        geofenceCenterLat: null,
+        geofenceCenterLng: null,
+        geofenceRadius: null,
+      },
+    };
+  }
+
+  const branchGeo = await resolveUserBranchGeofence(user);
+  const office = user.officeLocation || {};
+  const officeLat = toFiniteNumber(office.latitude);
+  const officeLng = toFiniteNumber(office.longitude);
+  const finalGeo =
+    branchGeo ??
+    (officeLat != null && officeLng != null
+      ? {
+          latitude: officeLat,
+          longitude: officeLng,
+          radius: toFiniteNumber(office.radius) ?? 100,
+        }
+      : null);
+
+  if (finalGeo == null) {
+    return {
+      ok: false,
+      status: 400,
+      message:
+        'Office geofence is turned on for your account, but your branch office location is not set up. Please contact your administrator.',
+      code: 'GEOFENCE_NOT_CONFIGURED',
+    };
+  }
+
+  const dist = haversineMeters(lat, lng, finalGeo.latitude, finalGeo.longitude);
+  const allowed = finalGeo.radius;
+  const geofenceSource = branchGeo ? 'branch' : 'office';
+
+  if (dist > allowed) {
+    const outsideM = Math.max(0, Math.round(dist - allowed));
+    return {
+      ok: false,
+      status: 400,
+      message: `You are out of office by about ${outsideM} m (allowed radius from ${geofenceSource === 'branch' ? 'your branch' : 'office'} is ${allowed} m). ${punchLabel} is not allowed.`,
+      code: 'OUT_OF_RADIUS',
+    };
+  }
+
+  return {
+    ok: true,
+    ctx: {
+      geofenceDistanceM: dist,
+      geofenceSource,
+      geofenceCenterLat: finalGeo.latitude,
+      geofenceCenterLng: finalGeo.longitude,
+      geofenceRadius: allowed,
+    },
+  };
+}
+
+async function resolveEffectiveUser(reqUser) {
+  const userId = normalizeObjectIdString(reqUser?._id);
+  if (!userId) return reqUser;
+  try {
+    const fresh = await User.findById(userId).select('-password').lean();
+    if (fresh && typeof fresh === 'object') {
+      return fresh;
+    }
+  } catch (_) {}
+  return reqUser;
+}
+
+function companyShiftList(company) {
+  const fromSettings = company?.settings?.attendance?.shifts;
+  if (Array.isArray(fromSettings) && fromSettings.length > 0) return fromSettings;
+  const fromOrgSetup = company?.orgSetup?.shifts;
+  if (Array.isArray(fromOrgSetup) && fromOrgSetup.length > 0) return fromOrgSetup;
+  return [];
+}
+
+function findShiftById(shifts, userShiftId) {
+  if (!userShiftId || !Array.isArray(shifts) || shifts.length === 0) return null;
+  const hit = shifts.find((s) => normalizeShiftId(s?._id) === userShiftId);
+  if (hit) return hit;
+  return (
+    shifts.find((s) => normalizeShiftId(s?.id) === userShiftId) ||
+    shifts.find((s) => normalizeShiftId(s?.shiftId) === userShiftId) ||
+    null
+  );
+}
+
+async function resolveCurrentAttendanceContext(user) {
+  const company = await loadCompanyRawById(user.companyId);
+  const userShiftId = normalizeShiftId(user.shiftId);
+  const shifts = companyShiftList(company);
+  const shift = findShiftById(shifts, userShiftId);
+  const branchGeo = await resolveUserBranchGeofence(user);
+  const officeRadius = toFiniteNumber(user?.officeLocation?.radius) ?? 100;
+  const branchRadius = toFiniteNumber(branchGeo?.radius) ?? officeRadius;
+  const branchName = toTrimmedString(
+    branchGeo?.branchName || user?.employeeProfile?.branchName || 'Office',
+  );
+  return {
+    shiftId: userShiftId || null,
+    shiftName: toTrimmedString(shift?.name) || null,
+    shiftStart: toTrimmedString(shift?.startTime) || null,
+    shiftEnd: toTrimmedString(shift?.endTime) || null,
+    branchName: branchName || null,
+    branchRadiusM: branchRadius,
+    attendanceGeofenceEnabled: user?.attendanceGeofenceEnabled === true,
+    branchId: normalizeObjectIdString(user?.branchId) || null,
+    geofenceSource: branchGeo ? 'branch' : 'office',
+  };
+}
+
+function logAttendancePunchContext({
+  action,
+  user,
+  lat,
+  lng,
+  branchName,
+  branchRadius,
+  shiftId,
+  shiftName,
+  shiftStartTime,
+  shiftEndTime,
+}) {
+  console.log(
+    `[AttendancePunchDebug][backend] action=${action} ` +
+      `userId=${String(user?._id || '')} ` +
+      `companyId=${String(user?.companyId || '')} ` +
+      `branchId=${String(user?.branchId || '')} ` +
+      `branchName="${branchName || '-'}" ` +
+      `branchRadiusM=${Number.isFinite(Number(branchRadius)) ? Number(branchRadius) : '-'} ` +
+      `attendanceGeofenceEnabled=${user?.attendanceGeofenceEnabled === true} ` +
+      `shiftId="${shiftId || '-'}" ` +
+      `shiftName="${shiftName || '-'}" ` +
+      `shiftStart="${shiftStartTime || '-'}" ` +
+      `shiftEnd="${shiftEndTime || '-'}" ` +
+      `lat=${lat} lng=${lng}`,
+  );
+}
+
+function buildPunchDebugContext({
+  action,
+  user,
+  lat,
+  lng,
+  shiftId,
+  shiftName,
+  shiftStartTime,
+  shiftEndTime,
+  branchName,
+  branchRadius,
+  geofenceEnabled,
+  geofenceCenterLat,
+  geofenceCenterLng,
+  geofenceDistanceM,
+  geofenceSource,
+}) {
+  return {
+    action,
+    userId: String(user?._id || ''),
+    companyId: String(user?.companyId || ''),
+    branchId: String(user?.branchId || ''),
+    attendanceGeofenceEnabled: geofenceEnabled === true,
+    shiftId: shiftId || null,
+    shiftName: shiftName || null,
+    shiftStart: shiftStartTime || null,
+    shiftEnd: shiftEndTime || null,
+    branchName: branchName || null,
+    branchRadiusM: Number.isFinite(Number(branchRadius)) ? Number(branchRadius) : null,
+    geofenceSource: geofenceSource || null,
+    geofenceCenterLat:
+      Number.isFinite(Number(geofenceCenterLat)) ? Number(geofenceCenterLat) : null,
+    geofenceCenterLng:
+      Number.isFinite(Number(geofenceCenterLng)) ? Number(geofenceCenterLng) : null,
+    geofenceDistanceM:
+      Number.isFinite(Number(geofenceDistanceM)) ? Math.round(Number(geofenceDistanceM)) : null,
+    requestLat: Number.isFinite(Number(lat)) ? Number(lat) : null,
+    requestLng: Number.isFinite(Number(lng)) ? Number(lng) : null,
+    serverTime: new Date().toISOString(),
+  };
+}
+
+function parseHolidayDateRaw(raw) {
+  if (raw == null) return null;
+  if (raw instanceof Date && Number.isFinite(raw.getTime())) return raw;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d;
+}
+
+function ymdFromDate(d) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (!Number.isFinite(dt.getTime())) return '';
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function monthBoundsFromYmd(ymd) {
+  const raw = String(ymd || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return null;
+  const [y, m] = raw.split('-').map((x) => Number(x));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return null;
+  return {
+    start: new Date(y, m - 1, 1, 0, 0, 0, 0),
+    end: new Date(y, m, 0, 23, 59, 59, 999),
+  };
+}
+
+function extractCompanyHolidaysForMonth(company, user, monthYmd) {
+  const bounds = monthBoundsFromYmd(monthYmd);
+  if (!bounds) return [];
+  const raw =
+    company?.settings?.business?.holidays ||
+    company?.settings?.attendance?.holidays ||
+    [];
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+
+  const userBranchId = toTrimmedString(user?.branchId);
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const dateRaw = item.date ?? item.holidayDate ?? item.startDate ?? item.fromDate;
+    const date = parseHolidayDateRaw(dateRaw);
+    if (!date) continue;
+    if (date < bounds.start || date > bounds.end) continue;
+
+    const branches = Array.isArray(item.branchIds)
+      ? item.branchIds
+      : Array.isArray(item.branches)
+        ? item.branches
+        : null;
+    if (branches && branches.length > 0 && userBranchId) {
+      const allowed = branches.some((b) => toTrimmedString(b?._id ?? b?.id ?? b) === userBranchId);
+      if (!allowed) continue;
+    }
+    out.push({
+      ymd: ymdFromDate(date),
+      name: toTrimmedString(item.name || item.title || 'Holiday'),
+    });
+  }
+  return out;
 }
 
 /** Open session: no mobile checkout and no web checkout. */
@@ -112,10 +489,17 @@ async function resolveAttendanceSelfieUrl(file, user, label) {
 
 exports.checkIn = async (req, res) => {
   try {
+    console.log(
+      `[AttendancePunchDebug][backend] endpoint_hit action=checkin hasSelfie=${Boolean(req.file)} ` +
+        `source=${String(req.body?.source || req.body?.checkInSource || req.body?.metaSource || '') || '-'} ` +
+        `lat=${String(req.body?.lat ?? req.body?.latitude ?? '-')} ` +
+        `lng=${String(req.body?.lng ?? req.body?.longitude ?? '-')} ` +
+        `ip=${req.ip || '-'}`,
+    );
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Selfie image is required' });
     }
-    const user = req.user;
+    const user = await resolveEffectiveUser(req.user);
     if (!user?._id) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
@@ -186,28 +570,66 @@ exports.checkIn = async (req, res) => {
       });
     }
 
-    const office = user.officeLocation || {};
-    const officeLat = Number(office.latitude);
-    const officeLng = Number(office.longitude);
-    // If office location is not configured, allow check-in using live lat/lng only.
-    if (Number.isFinite(officeLat) && Number.isFinite(officeLng)) {
-      const parsedRadius = Number(office.radius);
-      const radius = Number.isFinite(parsedRadius) && parsedRadius > 0 ? parsedRadius : 100;
-      const dist = haversineMeters(lat, lng, officeLat, officeLng);
-      if (dist > radius) {
-        return res.status(400).json({
-          success: false,
-          message: `You are outside allowed radius (${Math.round(dist)}m > ${radius}m)`,
-          code: 'OUT_OF_RADIUS',
-        });
-      }
+    const geofenceAssert = await assertWithinAttendanceGeofence(user, lat, lng, { punchLabel: 'Check-in' });
+    if (!geofenceAssert.ok) {
+      return res.status(geofenceAssert.status).json({
+        success: false,
+        message: geofenceAssert.message,
+        code: geofenceAssert.code,
+      });
     }
+    const {
+      geofenceDistanceM,
+      geofenceSource,
+      geofenceCenterLat,
+      geofenceCenterLng,
+      geofenceRadius,
+    } = geofenceAssert.ctx;
 
     const checkInTime = now;
     const checkInSource =
       String(req.body?.source || req.body?.checkInSource || req.body?.metaSource || '')
         .trim()
         .toLowerCase() || 'manual';
+    const company = await loadCompanyRawById(user.companyId);
+    const userShiftId = normalizeShiftId(user.shiftId);
+    const shifts = companyShiftList(company);
+    const shift = findShiftById(shifts, userShiftId);
+    const branchGeoForLog = await resolveUserBranchGeofence(user);
+    const officeRadiusForLog = toFiniteNumber(user?.officeLocation?.radius) ?? 100;
+    const branchRadiusForLog = toFiniteNumber(branchGeoForLog?.radius) ?? officeRadiusForLog;
+    const branchNameForLog = toTrimmedString(
+      branchGeoForLog?.branchName || user?.employeeProfile?.branchName || '',
+    );
+    logAttendancePunchContext({
+      action: 'checkin',
+      user,
+      lat,
+      lng,
+      branchName: branchNameForLog,
+      branchRadius: branchRadiusForLog,
+      shiftId: userShiftId,
+      shiftName: toTrimmedString(shift?.name),
+      shiftStartTime: toTrimmedString(shift?.startTime),
+      shiftEndTime: toTrimmedString(shift?.endTime),
+    });
+    const debugContext = buildPunchDebugContext({
+      action: 'checkin',
+      user,
+      lat,
+      lng,
+      shiftId: userShiftId,
+      shiftName: toTrimmedString(shift?.name),
+      shiftStartTime: toTrimmedString(shift?.startTime),
+      shiftEndTime: toTrimmedString(shift?.endTime),
+      branchName: branchNameForLog,
+      branchRadius: branchRadiusForLog,
+      geofenceEnabled: user.attendanceGeofenceEnabled === true,
+      geofenceCenterLat,
+      geofenceCenterLng,
+      geofenceDistanceM,
+      geofenceSource,
+    });
     const checkInImageUrl = await resolveAttendanceSelfieUrl(req.file, user, 'checkin');
     const addressIn = normalizeStoredAddress(req.body.address);
     const attendance = await Attendance.create({
@@ -223,6 +645,12 @@ exports.checkIn = async (req, res) => {
         accuracy: Number.isFinite(accuracy) ? accuracy : undefined,
         isMocked,
       },
+      shiftId: userShiftId || null,
+      shiftName: toTrimmedString(shift?.name),
+      shiftStartTime: toTrimmedString(shift?.startTime),
+      shiftEndTime: toTrimmedString(shift?.endTime),
+      source: checkInSource,
+      checkInSource,
       status: 'PENDING',
     });
 
@@ -258,6 +686,7 @@ exports.checkIn = async (req, res) => {
       info: {
         checkedInAt: checkInTime,
         locationVerified: true,
+        debugContext,
       },
     });
   } catch (error) {
@@ -278,10 +707,17 @@ exports.checkIn = async (req, res) => {
 
 exports.checkOut = async (req, res) => {
   try {
+    console.log(
+      `[AttendancePunchDebug][backend] endpoint_hit action=checkout hasSelfie=${Boolean(req.file)} ` +
+        `source=${String(req.body?.source || req.body?.checkOutSource || req.body?.metaSource || '') || '-'} ` +
+        `lat=${String(req.body?.lat ?? req.body?.latitude ?? '-')} ` +
+        `lng=${String(req.body?.lng ?? req.body?.longitude ?? '-')} ` +
+        `ip=${req.ip || '-'}`,
+    );
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'Selfie image is required' });
     }
-    const user = req.user;
+    const user = await resolveEffectiveUser(req.user);
     if (!user?._id) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
@@ -300,6 +736,18 @@ exports.checkOut = async (req, res) => {
         code: 'MOCK_LOCATION',
       });
     }
+
+    const checkoutGeofenceAssert = await assertWithinAttendanceGeofence(user, lat, lng, {
+      punchLabel: 'Check-out',
+    });
+    if (!checkoutGeofenceAssert.ok) {
+      return res.status(checkoutGeofenceAssert.status).json({
+        success: false,
+        message: checkoutGeofenceAssert.message,
+        code: checkoutGeofenceAssert.code,
+      });
+    }
+    const checkoutGeofenceCtx = checkoutGeofenceAssert.ctx;
 
     const attendance = await Attendance.findOne({
       userId: user._id,
@@ -324,6 +772,10 @@ exports.checkOut = async (req, res) => {
     }
 
     const checkOutTime = new Date();
+    const checkOutSource =
+      String(req.body?.source || req.body?.checkOutSource || req.body?.metaSource || '')
+        .trim()
+        .toLowerCase() || 'manual';
     const durationMinutes = Math.max(
       0,
       Math.round((checkOutTime.getTime() - checkInDate.getTime()) / 60000),
@@ -336,6 +788,45 @@ exports.checkOut = async (req, res) => {
         ? attendance.attendanceDate
         : startOfDay(checkInDate);
     const status = statusFromDuration(durationMinutes);
+    const branchGeoForLog = await resolveUserBranchGeofence(user);
+    const officeRadiusForLog = toFiniteNumber(user?.officeLocation?.radius) ?? 100;
+    const branchRadiusForLog = toFiniteNumber(branchGeoForLog?.radius) ?? officeRadiusForLog;
+    const branchNameForLog = toTrimmedString(
+      branchGeoForLog?.branchName || user?.employeeProfile?.branchName || '',
+    );
+    logAttendancePunchContext({
+      action: 'checkout',
+      user,
+      lat,
+      lng,
+      branchName: branchNameForLog,
+      branchRadius: branchRadiusForLog,
+      shiftId: toTrimmedString(attendance.shiftId),
+      shiftName: toTrimmedString(attendance.shiftName),
+      shiftStartTime: toTrimmedString(attendance.shiftStartTime),
+      shiftEndTime: toTrimmedString(attendance.shiftEndTime),
+    });
+    const debugContext = buildPunchDebugContext({
+      action: 'checkout',
+      user,
+      lat,
+      lng,
+      shiftId: toTrimmedString(attendance.shiftId),
+      shiftName: toTrimmedString(attendance.shiftName),
+      shiftStartTime: toTrimmedString(attendance.shiftStartTime),
+      shiftEndTime: toTrimmedString(attendance.shiftEndTime),
+      branchName: branchNameForLog,
+      branchRadius: branchRadiusForLog,
+      geofenceEnabled: user.attendanceGeofenceEnabled === true,
+      geofenceCenterLat: checkoutGeofenceCtx.geofenceCenterLat ?? branchGeoForLog?.latitude ?? null,
+      geofenceCenterLng: checkoutGeofenceCtx.geofenceCenterLng ?? branchGeoForLog?.longitude ?? null,
+      geofenceDistanceM:
+        checkoutGeofenceCtx.geofenceDistanceM ??
+        (branchGeoForLog?.latitude != null && branchGeoForLog?.longitude != null
+          ? haversineMeters(lat, lng, branchGeoForLog.latitude, branchGeoForLog.longitude)
+          : null),
+      geofenceSource: checkoutGeofenceCtx.geofenceSource || (branchGeoForLog ? 'branch' : 'office'),
+    });
 
     const update = {
       checkOutTime,
@@ -353,6 +844,8 @@ exports.checkOut = async (req, res) => {
       attendanceDate,
       duration: durationMinutes,
       status,
+      checkOutSource,
+      source: attendance.source || attendance.checkInSource || checkOutSource,
     };
 
     const saved = await Attendance.findByIdAndUpdate(
@@ -365,6 +858,11 @@ exports.checkOut = async (req, res) => {
       success: true,
       message: 'Checked out successfully',
       attendance: saved,
+      info: {
+        checkedOutAt: checkOutTime,
+        locationVerified: true,
+        debugContext,
+      },
     });
   } catch (error) {
     if (error.attendanceHttpStatus) {
@@ -382,9 +880,47 @@ exports.checkOut = async (req, res) => {
   }
 };
 
+exports.logPunchButtonClick = async (req, res) => {
+  try {
+    const user = await resolveEffectiveUser(req.user);
+    if (!user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    const action = toTrimmedString(req.body?.action || '').toLowerCase();
+    const source = toTrimmedString(req.body?.source || '');
+    const stage = toTrimmedString(req.body?.stage || '');
+    const detail = toTrimmedString(req.body?.detail || '');
+    const context = await resolveCurrentAttendanceContext(user);
+    const shiftNameLog = toTrimmedString(context.shiftName) || '-';
+    const shiftStartLog = toTrimmedString(context.shiftStart) || '-';
+    const shiftEndLog = toTrimmedString(context.shiftEnd) || '-';
+    const branchNameLog = toTrimmedString(context.branchName) || '-';
+    const branchRadiusLog = Number.isFinite(Number(context.branchRadiusM))
+      ? String(Math.round(Number(context.branchRadiusM)))
+      : '-';
+    const shiftIdLog = toTrimmedString(context.shiftId) || '-';
+    const geofenceSrcLog = toTrimmedString(context.geofenceSource) || '-';
+    console.log(
+      `[AttendancePunchDebug][backend] button_click action=${action || '-'} ` +
+        `userId=${String(user._id)} companyId=${String(user.companyId || '')} ` +
+        `branchId=${String(user.branchId || '')} branchName="${branchNameLog}" branchRadiusM=${branchRadiusLog} ` +
+        `geofenceEnabled=${user.attendanceGeofenceEnabled === true} geofenceSource=${geofenceSrcLog} ` +
+        `shiftId="${shiftIdLog}" shiftName="${shiftNameLog}" shiftStart="${shiftStartLog}" shiftEnd="${shiftEndLog}" ` +
+        `source="${source || '-'}" stage="${stage || '-'}" detail="${detail || '-'}" ip=${req.ip || '-'}`,
+    );
+    return res.json({ success: true, data: context });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to log button click',
+      error: error.message,
+    });
+  }
+};
+
 exports.getHistory = async (req, res) => {
   try {
-    const user = req.user;
+    const user = await resolveEffectiveUser(req.user);
     if (!user?._id) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
@@ -432,6 +968,64 @@ exports.getHistory = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch attendance history',
+      error: error.message,
+    });
+  }
+};
+
+function normalizeShiftId(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'object') {
+    if (value._id) return String(value._id).trim();
+    if (value.id) return String(value.id).trim();
+    if (value.$oid) return String(value.$oid).trim();
+  }
+  return String(value).trim();
+}
+
+function mapWeeklyDayToDartWeekday(day) {
+  const n = Number(day);
+  if (!Number.isFinite(n)) return null;
+  // Backend weekly-off day usually 0..6 (Sun..Sat), Dart DateTime uses 1..7 (Mon..Sun).
+  return n === 0 ? 7 : n;
+}
+
+exports.getShiftMeta = async (req, res) => {
+  try {
+    const user = req.user;
+    if (!user?._id) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const userShiftId = normalizeShiftId(user.shiftId);
+    const company = await loadCompanyRawById(user.companyId);
+
+    const shifts = companyShiftList(company);
+    const shift = findShiftById(shifts, userShiftId);
+
+    const weeklyHolidays = company?.settings?.business?.weeklyHolidays || [];
+    const weekOffWeekdays = weeklyHolidays
+      .map((h) => mapWeeklyDayToDartWeekday(h?.day))
+      .filter((d) => d != null);
+    const month = req.query?.month;
+    const holidays = extractCompanyHolidaysForMonth(company, user, month);
+
+    return res.json({
+      success: true,
+      data: {
+        shiftId: userShiftId || null,
+        shiftName: shift?.name || null,
+        startTime: shift?.startTime || null,
+        endTime: shift?.endTime || null,
+        weekOffWeekdays,
+        holidays,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch shift details',
       error: error.message,
     });
   }

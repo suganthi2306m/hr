@@ -6,6 +6,7 @@ function SlideOverPanel({
   description,
   onClose,
   children,
+  footer = null,
   widthClass = 'sm:max-w-xl',
   titleClassName = '',
 }) {
@@ -43,9 +44,19 @@ function SlideOverPanel({
             </button>
           </div>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 pt-4 [-webkit-overflow-scrolling:touch]">
+        <div
+          className={clsx(
+            'min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-4 [-webkit-overflow-scrolling:touch]',
+            footer ? 'pb-4' : 'pb-6',
+          )}
+        >
           {children}
         </div>
+        {footer ? (
+          <footer className="shrink-0 border-t border-neutral-200 bg-white px-5 py-4 shadow-[0_-6px_20px_rgba(15,15,15,0.06)]">
+            {footer}
+          </footer>
+        ) : null}
       </aside>
     </div>
   );

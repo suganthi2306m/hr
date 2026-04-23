@@ -1984,10 +1984,21 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                   task.status == TaskStatus.staffapproved)));
 
   /// Show "Resume Ride" when task is on hold, holdOnArrival, reopenedOnArrival, exited with hold, or admin reopened.
-  bool get _showResumeAfterExitButton => false;
+  bool get _showResumeAfterExitButton =>
+      task.id != null &&
+      task.id!.isNotEmpty &&
+      (task.status == TaskStatus.hold ||
+          task.status == TaskStatus.holdOnArrival ||
+          task.status == TaskStatus.reopenedOnArrival ||
+          task.status == TaskStatus.exited &&
+              (task.taskExitStatus == 'hold' || task.taskExitStatus == null) ||
+          task.status == TaskStatus.reopened);
 
   /// Show "Resume Ride" when task is in progress.
-  bool get _showResumeRideButton => false;
+  bool get _showResumeRideButton =>
+      task.id != null &&
+      task.id!.isNotEmpty &&
+      task.status == TaskStatus.inProgress;
 
   /// Show only Back when completed, waiting_for_approval, or rejected.
   bool get _showBackOnly =>

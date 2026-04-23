@@ -4,6 +4,7 @@ const leaveRequestSchema = new mongoose.Schema(
   {
     companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    leaveType: { type: String, trim: true, default: '' },
     startDate: { type: Date, required: true, index: true },
     endDate: { type: Date, required: true, index: true },
     reason: { type: String, trim: true, default: '' },

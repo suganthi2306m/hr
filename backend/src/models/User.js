@@ -11,8 +11,11 @@ const userSchema = new mongoose.Schema({
     companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company' },
     roleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Role' },
     branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch' },
+    // Shift reference used by attendance UI (maps to Company.settings.attendance.shifts[*]._id).
+    shiftId: { type: mongoose.Schema.Types.Mixed },
     hierarchyLevel: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
+    attendanceGeofenceEnabled: { type: Boolean, default: true },
     lastLogin: { type: Date },
     resetPasswordOTP: { type: String },
     resetPasswordOTPExpiry: { type: Date },
@@ -21,6 +24,15 @@ const userSchema = new mongoose.Schema({
     loginOTPExpiry: { type: Date },
     avatar: { type: String },
     fcmToken: { type: String },
+    /** Optional HR-style code (parity with web_backend User.employeeCode). */
+    employeeCode: { type: String, trim: true, default: '' },
+    designation: { type: String, trim: true, default: '' },
+    department: { type: String, trim: true, default: '' },
+    /**
+     * Flexible employee / onboarding payload. Custom field values keyed by
+     * Company.employeeCustomFieldDefs[].key live under `employeeProfile.custom`.
+     */
+    employeeProfile: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     officeLocation: {
         latitude: Number,
         longitude: Number,

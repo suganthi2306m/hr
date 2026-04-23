@@ -1,11 +1,16 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/models/company_visit.dart';
+import 'package:track/screens/attendance/attendance_summary_screen.dart';
 import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/dashboard/dashboard_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
-import 'package:track/screens/geo/my_tasks_screen.dart';
+import 'package:track/screens/geo/add_task_screen.dart';
+import 'package:track/screens/leads/lead_list_screen.dart';
 import 'package:track/screens/profile/profile_screen.dart';
 import 'package:track/screens/settings/settings_screen.dart';
 import 'package:track/services/auth_service.dart';
@@ -22,7 +27,8 @@ class VisitsScreen extends StatefulWidget {
   State<VisitsScreen> createState() => _VisitsScreenState();
 }
 
-class _VisitsScreenState extends State<VisitsScreen> {
+class _VisitsScreenState extends State<VisitsScreen>
+    with MainShellSwipeNavigation {
   final CompanyVisitService _service = CompanyVisitService();
 
   static const int _weekStripPastDays = 20;
@@ -40,6 +46,7 @@ class _VisitsScreenState extends State<VisitsScreen> {
   List<CompanyVisitRecord> _visits = const [];
   bool _loading = true;
   String? _error;
+  String? _loggedInUserId;
 
   static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
@@ -52,8 +59,27 @@ class _VisitsScreenState extends State<VisitsScreen> {
     _selectedDay = _dateOnly(DateTime.now());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduleScrollWeekStripToDate(_selectedDay);
-      _fetchVisits();
+      _loadUserIdThenVisits();
     });
+  }
+
+  Future<void> _loadUserIdThenVisits() async {
+    await _loadLoggedInUserId();
+    if (mounted) await _fetchVisits();
+  }
+
+  Future<void> _loadLoggedInUserId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('user');
+      if (raw == null || raw.isEmpty) return;
+      final map = jsonDecode(raw);
+      if (map is! Map) return;
+      final id = map['_id'] ?? map['id'] ?? map['userId'];
+      if (id != null && mounted) {
+        setState(() => _loggedInUserId = id is String ? id : id.toString());
+      }
+    } catch (_) {}
   }
 
   @override
@@ -118,8 +144,9 @@ class _VisitsScreenState extends State<VisitsScreen> {
   void _navigateToIndex(int index) {
     if (index == 2) return;
     final Widget target = switch (index) {
-      0 => const DashboardScreen(),
-      1 => const MyTasksScreen(),
+      0 => const AttendanceSummaryScreen(),
+      1 => const DashboardScreen(),
+      3 => const LeadListScreen(),
       _ => const VisitsScreen(),
     };
     Navigator.pushReplacement(
@@ -141,6 +168,16 @@ class _VisitsScreenState extends State<VisitsScreen> {
   void _openAppMenu(BuildContext context) {
     showAppDrawerMenu(
       context,
+      onAddTask: _loggedInUserId != null && _loggedInUserId!.isNotEmpty
+          ? () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AddTaskScreen(userId: _loggedInUserId!),
+                ),
+              ).then((_) => _fetchVisits());
+            }
+          : null,
       onAddCustomer: () {
         Navigator.push(
           context,
@@ -798,7 +835,10 @@ class _VisitsScreenState extends State<VisitsScreen> {
         backgroundColor: Colors.white,
         body: SafeArea(
           bottom: false,
-          child: Column(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onHorizontalDragEnd: (details) => handleMainShellSwipe(details, 2),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildHeroAndWeekStrip(),
@@ -886,6 +926,7 @@ class _VisitsScreenState extends State<VisitsScreen> {
                       ),
               ),
             ],
+          ),
           ),
         ),
         bottomNavigationBar: OvalBottomNavBar(

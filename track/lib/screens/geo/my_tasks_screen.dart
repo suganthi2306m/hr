@@ -7,8 +7,10 @@ import 'package:track/config/app_route_observer.dart';
 import 'package:track/models/task.dart';
 import 'package:track/services/customer_service.dart';
 import 'package:track/services/task_service.dart';
+import 'package:track/screens/attendance/attendance_screen.dart';
 import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/dashboard/dashboard_screen.dart';
+import 'package:track/screens/geo/add_task_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
 import 'package:track/screens/geo/arrived_screen.dart';
 import 'package:track/screens/geo/completed_task_detail_screen.dart';
@@ -570,6 +572,23 @@ class _MyTasksScreenState extends State<MyTasksScreen>
                       ),
                     ),
                   ),
+                  if (_loggedInUserId != null && _loggedInUserId!.isNotEmpty)
+                    IconButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) =>
+                                AddTaskScreen(userId: _loggedInUserId!),
+                          ),
+                        ).then((_) => _fetchTasks());
+                      },
+                      icon: Icon(
+                        Icons.add_circle_outline,
+                        color: Colors.black.withValues(alpha: 0.82),
+                      ),
+                      tooltip: 'Add task',
+                    ),
                   IconButton(
                     onPressed: _openTaskFiltersBottomSheet,
                     icon: Icon(
@@ -842,6 +861,7 @@ class _MyTasksScreenState extends State<MyTasksScreen>
     final Widget target = switch (index) {
       0 => const DashboardScreen(),
       2 => const VisitsScreen(),
+      3 => const AttendanceScreen(),
       _ => const MyTasksScreen(),
     };
     Navigator.pushReplacement(
@@ -863,6 +883,17 @@ class _MyTasksScreenState extends State<MyTasksScreen>
   void _openAppMenu(BuildContext context) {
     showAppDrawerMenu(
       context,
+      onAddTask: _loggedInUserId != null && _loggedInUserId!.isNotEmpty
+          ? () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      AddTaskScreen(userId: _loggedInUserId!),
+                ),
+              ).then((_) => _fetchTasks());
+            }
+          : null,
       onAddCustomer: () {
         Navigator.push(
           context,

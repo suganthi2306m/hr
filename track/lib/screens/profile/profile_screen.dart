@@ -5,8 +5,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/dashboard/dashboard_screen.dart';
+import 'package:track/screens/profile/employee_more_details_screen.dart';
 import 'package:track/screens/settings/settings_screen.dart';
 import 'package:track/services/auth_service.dart';
+import 'package:track/utils/employee_custom_fields_display.dart';
 import 'package:track/widgets/app_feedback.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
 import 'package:track/widgets/location_loader.dart';
@@ -228,6 +230,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final u = _user;
+    final showMoreDetails = activeEmployeeCustomFieldDefs(u?['employeeCustomFieldDefs']).isNotEmpty;
     final name = u?['name']?.toString().trim().isNotEmpty == true
         ? u!['name'].toString().trim()
         : (u?['fullName']?.toString().trim().isNotEmpty == true ? u!['fullName'].toString().trim() : 'User');
@@ -374,6 +377,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 20),
                       _PasswordUpdateCard(onTap: _showChangePasswordDialog),
+                      if (showMoreDetails && u != null) ...[
+                        const SizedBox(height: 12),
+                        _ProfileMenuCard(
+                          icon: Icons.tune_rounded,
+                          label: 'More details',
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => EmployeeMoreDetailsScreen(user: Map<String, dynamic>.from(u)),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       _ProfileMenuCard(
                         icon: Icons.support_agent_rounded,

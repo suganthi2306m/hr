@@ -1,23 +1,45 @@
 import clsx from 'clsx';
+import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { LiveTrackWordmark } from '../brand/LiveTrackWordmark';
 import logoImg from '../../assets/logo.png';
 
 const mainLinks = [
   { to: '/dashboard', label: 'Dashboard', icon: 'dashboard', end: true },
-  { to: '/dashboard/users', label: 'Users', icon: 'users' },
+  { to: '/dashboard/users', label: 'Employee', icon: 'users' },
 ];
 
 const trackLinks = [
   { to: '/dashboard/track/customers', label: 'Customers', icon: 'customers' },
   { to: '/dashboard/track/visits', label: 'Visits', icon: 'visits' },
+  { to: '/dashboard/track/leads', label: 'Leads', icon: 'tasks' },
   { to: '/dashboard/track/livetrack', label: 'LiveTrack', icon: 'location', brand: true },
 ];
 
-const opsLinks = [
-  { to: '/dashboard/operations/attendance', label: 'Attendance', icon: 'attendance' },
-  { to: '/dashboard/operations/leave', label: 'Leave', icon: 'leave' },
+const LEAD_BASE = '/dashboard/track/leads';
+const leadSubLinks = [
+  { to: `${LEAD_BASE}`, label: 'Overview' },
+  { to: `${LEAD_BASE}/follow-up`, label: 'Follow-up' },
 ];
+
+const ATT_BASE = '/dashboard/operations/attendance';
+const attendanceSubLinks = [
+  { to: `${ATT_BASE}/view`, label: 'View' },
+  { to: `${ATT_BASE}/approval`, label: 'Approval' },
+];
+
+const opsLinks = [
+  { to: '/dashboard/operations/leave', label: 'Leave', icon: 'leave' },
+  { to: '/dashboard/operations/holidays', label: 'Holiday', icon: 'holiday' },
+];
+
+const configurationLinks = [
+  { to: '/dashboard/billing', label: 'Subscription & billing', icon: 'billing' },
+  { to: '/dashboard/settings/organization-info', label: 'Organization info', icon: 'org' },
+  { to: '/dashboard/settings/organization', label: 'Organization setup', icon: 'org' },
+];
+
+const settingsLink = { to: '/dashboard/settings', label: 'Settings', icon: 'settings' };
 
 function MenuIcon({ className = 'h-4 w-4' }) {
   return (
@@ -108,6 +130,36 @@ function NavIcon({ name }) {
           <path d="M5 19c-.3-3.6.7-6.7 3.4-9.4" />
         </svg>
       );
+    case 'holiday':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <rect x="3" y="5" width="18" height="16" rx="2" />
+          <path d="M8 3v4M16 3v4M3 11h18" />
+          <path d="M12 15v2" strokeLinecap="round" />
+        </svg>
+      );
+    case 'billing':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <rect x="2" y="5" width="20" height="14" rx="2" />
+          <path d="M2 10h20" />
+        </svg>
+      );
+    case 'org':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <path d="M4 7h16v10H4z" />
+          <path d="M8 7V5h8v2" />
+          <path d="M9 12h6" />
+        </svg>
+      );
+    case 'settings':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3h0a1.6 1.6 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.2a1.6 1.6 0 0 0 1 1.5h0a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v0a1.6 1.6 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.2a1.6 1.6 0 0 0-1.4 1z" />
+        </svg>
+      );
     default:
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
@@ -127,6 +179,15 @@ const navItemClass = ({ isActive }) =>
 function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onCloseMobile }) {
   const location = useLocation();
   const visitsPrefix = '/dashboard/track/visits';
+  const [attendanceOpen, setAttendanceOpen] = useState(() => location.pathname.startsWith(ATT_BASE));
+  const [leadsOpen, setLeadsOpen] = useState(() => location.pathname.startsWith(LEAD_BASE));
+
+  useEffect(() => {
+    if (location.pathname.startsWith(ATT_BASE)) setAttendanceOpen(true);
+  }, [location.pathname]);
+  useEffect(() => {
+    if (location.pathname.startsWith(LEAD_BASE)) setLeadsOpen(true);
+  }, [location.pathname]);
 
   /** Desktop collapsed hides labels; mobile drawer must always show labels (no hover tooltips on touch). */
   const showNavText = isMobileOpen || !isCollapsed;
@@ -209,6 +270,48 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
           </p>
           <div className="space-y-2">
             {trackLinks.map((item) => (
+              item.to === LEAD_BASE && !iconOnlyNav ? (
+                <div key={item.to} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setLeadsOpen((o) => !o)}
+                    className={clsx(
+                      'group relative flex w-full items-center justify-between rounded-full px-3 py-2.5 text-left text-sm font-semibold transition-colors',
+                      location.pathname.startsWith(LEAD_BASE)
+                        ? 'bg-white/10 text-white'
+                        : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                    )}
+                    aria-expanded={leadsOpen}
+                  >
+                    <span className="flex items-center gap-2">
+                      <NavIcon name={item.icon} />
+                      <span>{item.label}</span>
+                    </span>
+                    <ChevronIcon collapsed={!leadsOpen} />
+                  </button>
+                  {leadsOpen && (
+                    <div className="ml-2 space-y-0.5 border-l border-white/15 py-0.5 pl-3">
+                      {leadSubLinks.map((sub) => (
+                        <NavLink
+                          key={sub.to}
+                          to={sub.to}
+                          end={sub.to === LEAD_BASE}
+                          onClick={onCloseMobile}
+                          title={sub.label}
+                          className={({ isActive }) =>
+                            clsx(
+                              'block rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                              isActive ? 'bg-white text-dark shadow-sm' : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                            )
+                          }
+                        >
+                          {sub.label}
+                        </NavLink>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -232,6 +335,7 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
                   </span>
                 )}
               </NavLink>
+              )
             ))}
           </div>
         </div>
@@ -241,6 +345,65 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
             {iconOnlyNav ? '·' : 'Operations'}
           </p>
           <div className="space-y-2">
+            {iconOnlyNav ? (
+              <NavLink
+                to={`${ATT_BASE}/view`}
+                onClick={onCloseMobile}
+                title="Attendance"
+                className={({ isActive }) =>
+                  navItemClass({
+                    isActive: isActive || location.pathname.startsWith(ATT_BASE),
+                  })
+                }
+              >
+                <span className="flex items-center justify-center gap-2">
+                  <NavIcon name="attendance" />
+                </span>
+                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-semibold text-dark opacity-0 shadow-panel transition-opacity group-hover:opacity-100">
+                  Attendance
+                </span>
+              </NavLink>
+            ) : (
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setAttendanceOpen((o) => !o)}
+                  className={clsx(
+                    'group relative flex w-full items-center justify-between rounded-full px-3 py-2.5 text-left text-sm font-semibold transition-colors',
+                    location.pathname.startsWith(ATT_BASE)
+                      ? 'bg-white/10 text-white'
+                      : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                  )}
+                  aria-expanded={attendanceOpen}
+                >
+                  <span className="flex items-center gap-2">
+                    <NavIcon name="attendance" />
+                    <span>Attendance</span>
+                  </span>
+                  <ChevronIcon collapsed={!attendanceOpen} />
+                </button>
+                {attendanceOpen && (
+                  <div className="ml-2 space-y-0.5 border-l border-white/15 py-0.5 pl-3">
+                    {attendanceSubLinks.map((item) => (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        onClick={onCloseMobile}
+                        title={item.label}
+                        className={({ isActive }) =>
+                          clsx(
+                            'block rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                            isActive ? 'bg-white text-dark shadow-sm' : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                          )
+                        }
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {opsLinks.map((item) => (
               <NavLink key={item.to} to={item.to} onClick={onCloseMobile} title={item.label} className={navItemClass}>
                 <span className={clsx('flex items-center gap-2', iconOnlyNav && 'justify-center')}>
@@ -255,6 +418,47 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
               </NavLink>
             ))}
           </div>
+        </div>
+
+        <div>
+          <p className={clsx('px-2 pb-2 text-xs uppercase tracking-wider text-slate-500', iconOnlyNav && 'text-center')}>
+            {iconOnlyNav ? '·' : 'Configuration'}
+          </p>
+          <div className="space-y-2">
+            {configurationLinks.map((item) => (
+              <NavLink key={item.to} to={item.to} onClick={onCloseMobile} title={item.label} className={navItemClass}>
+                <span className={clsx('flex items-center gap-2', iconOnlyNav && 'justify-center')}>
+                  <NavIcon name={item.icon} />
+                  {showNavText && <span>{item.label}</span>}
+                </span>
+                {iconOnlyNav && (
+                  <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-semibold text-dark opacity-0 shadow-panel transition-opacity group-hover:opacity-100">
+                    {item.label}
+                  </span>
+                )}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-2 border-t border-white/10 pt-4">
+          <NavLink
+            to={settingsLink.to}
+            end
+            onClick={onCloseMobile}
+            title={settingsLink.label}
+            className={navItemClass}
+          >
+            <span className={clsx('flex items-center gap-2', iconOnlyNav && 'justify-center')}>
+              <NavIcon name={settingsLink.icon} />
+              {showNavText && <span>{settingsLink.label}</span>}
+            </span>
+            {iconOnlyNav && (
+              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-semibold text-dark opacity-0 shadow-panel transition-opacity group-hover:opacity-100">
+                {settingsLink.label}
+              </span>
+            )}
+          </NavLink>
         </div>
       </nav>
 

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -12,7 +13,9 @@ import 'package:timezone/timezone.dart' as tz;
 class AlarmService {
   AlarmService._();
 
-  static const String _kAlarmChannelId = 'hrms_alarm_channel';
+  /// Shared with [AttendanceAlarmScheduler] scheduled punch reminders.
+  static const String alarmChannelId = 'hrms_alarm_channel';
+  static const String _kAlarmChannelId = alarmChannelId;
   static const String _kAlarmsPrefsKey = 'hrms_scheduled_alarms';
   static const int _kAlarmNotificationIdBase = 900000; // Avoid collision with FCM ids
 
@@ -23,8 +26,30 @@ class AlarmService {
     if (_timezoneInitialized) return;
     tz_data.initializeTimeZones();
     try {
-      tz.setLocalLocation(tz.UTC);
-    } catch (_) {}
+      final name = await FlutterTimezone.getLocalTimezone();
+      if (name.isNotEmpty) {
+        tz.setLocalLocation(tz.getLocation(name));
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[AlarmService] FlutterTimezone.getLocalTimezone failed: $e');
+      }
+      try {
+        final o = DateTime.now().timeZoneOffset;
+        final h = o.inHours;
+        final m = o.inMinutes.remainder(60).abs();
+        if (m == 0 && h != 0) {
+          final iana = 'Etc/GMT${h > 0 ? '-' : '+'}${h.abs()}';
+          tz.setLocalLocation(tz.getLocation(iana));
+        } else {
+          tz.setLocalLocation(tz.UTC);
+        }
+      } catch (_) {
+        try {
+          tz.setLocalLocation(tz.UTC);
+        } catch (_) {}
+      }
+    }
     _timezoneInitialized = true;
   }
 

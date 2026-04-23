@@ -38,6 +38,15 @@ const attendanceSchema = new mongoose.Schema(
     checkOutImageUrl: { type: String },
     checkInLocation: { type: geoPointSchema },
     checkOutLocation: { type: geoPointSchema },
+    /** Shift snapshot captured at check-in time for date-accurate history. */
+    shiftId: { type: mongoose.Schema.Types.Mixed, default: null },
+    shiftName: { type: String, default: '' },
+    shiftStartTime: { type: String, default: '' },
+    shiftEndTime: { type: String, default: '' },
+    /** Punch source markers (app/web/manual/auto) for audit. */
+    source: { type: String, default: '' },
+    checkInSource: { type: String, default: '' },
+    checkOutSource: { type: String, default: '' },
     duration: { type: Number, default: 0 }, // minutes
     status: {
       type: String,

@@ -1,4 +1,4 @@
-// When app is open and user is logged in, check every 5s if user is still active.
+// When app is open and user is logged in, check every 5 minutes if user is still active.
 // If deactivated, logout silently (no notification) and navigate to login.
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -32,7 +32,7 @@ class DeactivationCheckWrapper extends StatefulWidget {
 class _DeactivationCheckWrapperState extends State<DeactivationCheckWrapper>
     with WidgetsBindingObserver {
   Timer? _timer;
-  static const Duration _checkInterval = Duration(seconds: 5);
+  static const Duration _checkInterval = Duration(minutes: 5);
 
   @override
   void initState() {

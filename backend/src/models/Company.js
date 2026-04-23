@@ -81,6 +81,8 @@ const CompanySchema = new Schema(
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: Date,
+    /** HRMS parity: definitions for extra employee fields; values on User.employeeProfile.custom[key]. */
+    employeeCustomFieldDefs: { type: [Schema.Types.Mixed], default: [] },
     settings: {
       attendance: {
         geofence: {

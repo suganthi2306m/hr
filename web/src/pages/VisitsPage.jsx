@@ -31,6 +31,7 @@ function VisitsPage() {
   const navigate = useNavigate();
   const { setDashboardTrail, globalSearch } = useOutletContext() || {};
   const [items, setItems] = useState([]);
+  const [selectedVisitIds, setSelectedVisitIds] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
@@ -145,6 +146,10 @@ function VisitsPage() {
   }, [loadVisits]);
 
   useEffect(() => {
+    setSelectedVisitIds([]);
+  }, [debouncedSearch, userId, customerId, status, dateFrom, dateTo]);
+
+  useEffect(() => {
     if (!setDashboardTrail) return undefined;
     setDashboardTrail(null);
     return () => setDashboardTrail(null);
@@ -165,6 +170,7 @@ function VisitsPage() {
   }, [loadDirectory, loadVisits]);
 
   const canGoNext = !loading && (totalPages <= 0 || page < totalPages);
+  const allSelected = items.length > 0 && items.every((row) => selectedVisitIds.includes(String(row._id)));
   const pageWindow = useMemo(() => {
     if (totalPages <= 0) return [1];
     const start = Math.max(1, page - 1);
@@ -174,6 +180,89 @@ function VisitsPage() {
     for (let p = normalizedStart; p <= end; p += 1) arr.push(p);
     return arr;
   }, [page, totalPages]);
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedVisitIds([]);
+      return;
+    }
+    setSelectedVisitIds(items.map((row) => String(row._id)));
+  };
+
+  const toggleSelectVisit = (id) => {
+    setSelectedVisitIds((old) => (old.includes(id) ? old.filter((x) => x !== id) : [...old, id]));
+  };
+
+  const fetchAllFilteredVisits = useCallback(async () => {
+    const buildParams = (targetPage) => {
+      const params = { page: targetPage, limit: PAGE_SIZE };
+      if (debouncedSearch) params.search = debouncedSearch;
+      if (userId) params.userId = userId;
+      if (customerId) params.customerId = customerId;
+      if (status) params.status = status;
+      if (dateFrom) params.dateFrom = dateFrom;
+      if (dateTo) params.dateTo = dateTo;
+      if (dateFrom || dateTo) params.filterTimeZoneOffsetMinutes = -new Date().getTimezoneOffset();
+      return params;
+    };
+
+    const first = await apiClient.get('/company-visits/company', { params: buildParams(1) });
+    if (!first.data?.success) return [];
+    const firstItems = Array.isArray(first.data.items) ? first.data.items : [];
+    const pages = Math.max(1, Number(first.data.totalPages) || 1);
+    if (pages === 1) return firstItems;
+
+    const reqs = [];
+    for (let p = 2; p <= pages; p += 1) {
+      reqs.push(apiClient.get('/company-visits/company', { params: buildParams(p) }));
+    }
+    const rest = await Promise.all(reqs);
+    const all = [...firstItems];
+    rest.forEach((res) => {
+      if (res.data?.success && Array.isArray(res.data.items)) all.push(...res.data.items);
+    });
+    return all;
+  }, [debouncedSearch, userId, customerId, status, dateFrom, dateTo]);
+
+  const exportVisitRows = (sourceRows) => {
+    const rows = sourceRows.map((row) => {
+      const u = row.userId;
+      const userLabel = u && typeof u === 'object' ? [u.name, u.email].filter(Boolean).join(' · ') : '';
+      return [
+        userLabel,
+        row.companyName || '',
+        row.customerName || '',
+        formatDt(row.checkInTime),
+        formatDt(row.checkOutTime),
+        durationLabel(row),
+        row.status || '',
+      ];
+    });
+    const csv = [
+      'User,Company,Customer,Check-in,Check-out,Duration,Status',
+      ...rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(',')),
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'visits_export.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportSelectedVisits = async () => {
+    try {
+      const allFiltered = await fetchAllFilteredVisits();
+      const sourceRows = selectedVisitIds.length
+        ? allFiltered.filter((row) => selectedVisitIds.includes(String(row._id)))
+        : allFiltered;
+      if (!sourceRows.length) return;
+      exportVisitRows(sourceRows);
+    } catch {
+      setError('Unable to export visits.');
+    }
+  };
 
   return (
     <>
@@ -296,10 +385,21 @@ function VisitsPage() {
             <p className="text-sm font-semibold text-slate-600">
               {loading ? 'Loading…' : `${total} visit${total === 1 ? '' : 's'} found`}
             </p>
-            <p className="text-sm text-slate-600">
-              Page {page}
-              {totalPages > 0 ? ` of ${totalPages}` : ''}
-            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={!selectedVisitIds.length && !total}
+                onClick={() => void exportSelectedVisits()}
+                className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+                title={selectedVisitIds.length ? 'Export selected visits' : 'Export all filtered visits'}
+              >
+                Export
+              </button>
+              <p className="text-sm text-slate-600">
+                Page {page}
+                {totalPages > 0 ? ` of ${totalPages}` : ''}
+              </p>
+            </div>
           </div>
 
           {loading && !items.length ? (
@@ -311,6 +411,9 @@ function VisitsPage() {
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b border-neutral-100 bg-neutral-50/80 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+                    <th className="w-10 whitespace-nowrap px-4 py-3">
+                      <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} aria-label="Select all visits" />
+                    </th>
                     <th className="min-w-[13rem] whitespace-nowrap px-4 py-3">User</th>
                     <th className="min-w-[16rem] whitespace-nowrap px-4 py-3">Site / company</th>
                     <th className="whitespace-nowrap px-4 py-3">Check-in</th>
@@ -338,6 +441,14 @@ function VisitsPage() {
                         }}
                         className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-primary/5"
                       >
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedVisitIds.includes(String(row._id))}
+                            onChange={() => toggleSelectVisit(String(row._id))}
+                            aria-label={`Select visit ${row._id}`}
+                          />
+                        </td>
                         <td className="min-w-[13rem] max-w-[22rem] px-4 py-3 font-medium text-dark">
                           <span className="line-clamp-2">{userLabel}</span>
                         </td>

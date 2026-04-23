@@ -15,6 +15,7 @@ const notificationRoutes = require('./src/routes/notificationRoutes');
 const attendanceRoutes = require('./src/routes/attendanceRoutes');
 const leaveRoutes = require('./src/routes/leaveRoutes');
 const companyVisitRoutes = require('./src/routes/companyVisitRoutes');
+const leadRoutes = require('./src/routes/leadRoutes');
 
 const app = express();
 
@@ -63,6 +64,7 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/company-visits', companyVisitRoutes);
 app.use('/api/ops', require('./src/routes/opsRoutes'));
+app.use('/api/leads', leadRoutes);
 
 // Debug: Log all incoming requests (only in development)
 if (process.env.NODE_ENV !== 'production') {

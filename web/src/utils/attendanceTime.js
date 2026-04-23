@@ -178,20 +178,12 @@ export function wallClockPartsFromStoredUtc(isoOrDate) {
     hh = hh % 12 || 12;
     return { hh: pad2(hh), mm: pad2(d.getMinutes()), meridiem };
   }
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).formatToParts(d);
-  let hour = 12;
-  let minute = 0;
-  let meridiem = 'AM';
-  for (const p of parts) {
-    if (p.type === 'hour') hour = Number(p.value);
-    if (p.type === 'minute') minute = Number(p.value);
-    if (p.type === 'dayPeriod') meridiem = String(p.value).toUpperCase().startsWith('P') ? 'PM' : 'AM';
-  }
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return empty;
-  return { hh: pad2(hour), mm: pad2(minute), meridiem };
+  const z = dayjs(d).tz(tz);
+  if (!z.isValid()) return empty;
+  const h24 = z.hour();
+  const minute = z.minute();
+  const meridiem = h24 >= 12 ? 'PM' : 'AM';
+  let h12 = h24 % 12;
+  if (h12 === 0) h12 = 12;
+  return { hh: pad2(h12), mm: pad2(minute), meridiem };
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import Sidebar from '../components/layout/Sidebar';
@@ -38,21 +38,34 @@ function MenuIcon() {
 function NotificationBell({ socketRefresh = 0 }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
+  const socketDebounceRef = useRef(null);
 
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const { data } = await apiClient.get('/ops/notifications');
+      setItems(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      setItems([]);
+    }
+  }, []);
+
+  /** Load on mount and whenever the panel is opened (fresh list). */
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data } = await apiClient.get('/ops/notifications');
-        if (!cancelled) setItems(data.items || []);
-      } catch {
-        if (!cancelled) setItems([]);
-      }
-    })();
+    void fetchNotifications();
+  }, [open, fetchNotifications]);
+
+  /** Socket bumps can fire in bursts — debounce so we do not hammer the API. */
+  useEffect(() => {
+    if (socketRefresh <= 0) return undefined;
+    if (socketDebounceRef.current) clearTimeout(socketDebounceRef.current);
+    socketDebounceRef.current = setTimeout(() => {
+      socketDebounceRef.current = null;
+      void fetchNotifications();
+    }, 450);
     return () => {
-      cancelled = true;
+      if (socketDebounceRef.current) clearTimeout(socketDebounceRef.current);
     };
-  }, [open, socketRefresh]);
+  }, [socketRefresh, fetchNotifications]);
 
   const unread = items.filter((i) => !i.readAt).length;
 
@@ -145,18 +158,50 @@ function DashboardLayout() {
     .replace(/^\/dashboard\/?/, '')
     .split('/')
     .filter(Boolean);
-  const isUserDetailsPage = pathSegments[0] === 'users' && pathSegments.length === 2;
+  const isUserDetailsPage =
+    pathSegments[0] === 'users' &&
+    pathSegments.length === 2 &&
+    pathSegments[1] !== 'new' &&
+    pathSegments[1] !== 'import';
+  const isEmployeeOnboarding =
+    pathSegments[0] === 'users' &&
+    (pathSegments[1] === 'new' || (pathSegments.length === 3 && pathSegments[2] === 'employee'));
   const isLiveTrackPage =
     pathSegments.length >= 2 && pathSegments[0] === 'track' && pathSegments[1] === 'livetrack';
-  const pageTitle = isUserDetailsPage
-    ? 'User details'
+  const isOrganizationSetupPage =
+    pathSegments[0] === 'settings' && pathSegments[1] === 'organization';
+  const isAttendanceViewPage =
+    pathSegments[0] === 'operations' && pathSegments[1] === 'attendance' && pathSegments[2] === 'view';
+  const isAttendanceApprovalPage =
+    pathSegments[0] === 'operations' && pathSegments[1] === 'attendance' && pathSegments[2] === 'approval';
+  const isAttendanceOvertimePage =
+    pathSegments[0] === 'operations' && pathSegments[1] === 'attendance' && pathSegments[2] === 'overtime';
+  const pageTitle = isEmployeeOnboarding
+    ? pathSegments[1] === 'new'
+      ? 'Add employee'
+      : 'Employee record'
+    : isUserDetailsPage
+      ? 'Employee details'
     : isLiveTrackPage
       ? 'Live track'
-      : pathSegments.length
-        ? prettifySegment(pathSegments[pathSegments.length - 1])
-        : 'Dashboard';
+      : isAttendanceViewPage
+        ? 'Employee attendance'
+        : isAttendanceApprovalPage
+          ? 'Approvals'
+          : isAttendanceOvertimePage
+            ? 'Overtime'
+            : pathSegments.length
+              ? prettifySegment(pathSegments[pathSegments.length - 1])
+              : 'Dashboard';
 
   useEffect(() => {
+    if (['superadmin', 'mainsuperadmin'].includes(admin?.role)) {
+      navigate('/super', { replace: true });
+    }
+  }, [admin, navigate]);
+
+  useEffect(() => {
+    if (['superadmin', 'mainsuperadmin'].includes(admin?.role)) return;
     if (admin && !admin.companySetupCompleted) {
       navigate('/company-setup');
     }
@@ -196,7 +241,12 @@ function DashboardLayout() {
       <main className="relative min-w-0 flex-1 overflow-x-hidden p-3 sm:p-4 md:min-h-screen md:rounded-[2rem] md:bg-flux-panel md:p-6 md:shadow-panel-lg lg:p-8">
         <div className="mb-4 flex min-h-[2.75rem] items-center justify-between gap-2 sm:gap-3">
           <div className="flex min-w-0 flex-1 flex-col justify-center">
-            {isLiveTrackPage ? (
+            {isOrganizationSetupPage ? (
+              <h1 className="min-w-0 truncate text-xl font-black tracking-tight sm:text-2xl">
+                <span className="text-primary">Organization</span>
+                <span className="text-dark"> setup</span>
+              </h1>
+            ) : isLiveTrackPage ? (
               <h1 className="truncate text-xl font-black tracking-tight sm:text-2xl">
                 <span className="text-primary">Live</span>
                 <span className="text-dark"> track</span>

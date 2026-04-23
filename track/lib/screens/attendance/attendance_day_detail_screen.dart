@@ -10,10 +10,22 @@ class AttendanceDayDetailScreen extends StatelessWidget {
     super.key,
     required this.day,
     this.record,
+    this.shiftTiming,
   });
 
   final DateTime day;
   final AttendanceRecord? record;
+  final String? shiftTiming;
+
+  static String _locationLine(AttendanceGeo? g) {
+    if (g == null) return 'Not available';
+    final a = g.address?.trim() ?? '';
+    if (a.isNotEmpty) return a;
+    if (g.lat != 0 || g.lng != 0) {
+      return '${g.lat.toStringAsFixed(5)}, ${g.lng.toStringAsFixed(5)}';
+    }
+    return 'Not available';
+  }
 
   static String _statusLabel(AttendanceRecord? r) {
     if (r == null) return '—';
@@ -66,6 +78,17 @@ class AttendanceDayDetailScreen extends StatelessWidget {
               color: ink.withValues(alpha: 0.55),
             ),
           ),
+          if ((shiftTiming ?? '').isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Shift: $shiftTiming',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: ink.withValues(alpha: 0.5),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           Container(
             width: double.infinity,
@@ -210,8 +233,119 @@ class AttendanceDayDetailScreen extends StatelessWidget {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        margin: const EdgeInsets.only(right: 10, top: 6),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          'Check-in location: ${_locationLine(record!.checkInLocation)}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: ink.withValues(alpha: 0.75),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        margin: const EdgeInsets.only(right: 10, top: 6),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          'Check-out location: ${_locationLine(record!.checkOutLocation)}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: ink.withValues(alpha: 0.75),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if ((record!.checkInImageUrl ?? '').isNotEmpty ||
+                      (record!.checkOutImageUrl ?? '').isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 10,
+                      children: [
+                        if ((record!.checkInImageUrl ?? '').isNotEmpty)
+                          _SelfieThumb(
+                            label: 'Check-in selfie',
+                            imageUrl: record!.checkInImageUrl!,
+                          ),
+                        if ((record!.checkOutImageUrl ?? '').isNotEmpty)
+                          _SelfieThumb(
+                            label: 'Check-out selfie',
+                            imageUrl: record!.checkOutImageUrl!,
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelfieThumb extends StatelessWidget {
+  const _SelfieThumb({required this.label, required this.imageUrl});
+
+  final String label;
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 132,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Colors.black.withValues(alpha: 0.65),
+            ),
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: AspectRatio(
+              aspectRatio: 1,
+              child: Image.network(
+                imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  color: const Color(0xFFEDEFF2),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.image_not_supported_outlined),
+                ),
+              ),
             ),
           ),
         ],

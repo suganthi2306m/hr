@@ -20,6 +20,74 @@ async function getCompanyIdForAdmin(adminId) {
   return company?._id || null;
 }
 
+function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
+  const toRad = (d) => (Number(d) * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/** Apply resolved in/out times; when dashboard sends loginTime + valid check-in but no check-out, clear checkout. */
+function applyMarkPunchFields(item, inTime, outTime, loginTime, dayStartForPunch) {
+  const hadLoginTimePayload = loginTime != null && typeof loginTime === 'object';
+  if (dayStartForPunch) item.attendanceDate = dayStartForPunch;
+  if (inTime) item.checkInAt = inTime;
+  if (outTime) {
+    item.checkOutAt = outTime;
+  } else if (hadLoginTimePayload && inTime) {
+    item.checkOutAt = undefined;
+    item.checkOutLat = undefined;
+    item.checkOutLng = undefined;
+  }
+  if (item.checkInAt && item.checkOutAt) {
+    item.minutesWorked = Math.max(
+      0,
+      Math.round((item.checkOutAt.getTime() - item.checkInAt.getTime()) / 60000),
+    );
+  } else {
+    item.minutesWorked = null;
+  }
+}
+
+/**
+ * `checkInAt` is required on the schema. Decision-only `/mark` calls often omit `loginTime`, so `inTime`
+ * is null and we must not leave `checkInAt` missing (e.g. lean/mobile docs with only `checkInTime`).
+ */
+async function ensureCheckInAtPersistable(item, { prevCheckInAt, dayStartForPunch, day }) {
+  const cur = item.checkInAt;
+  if (cur && !Number.isNaN(new Date(cur).getTime())) return;
+  if (prevCheckInAt && !Number.isNaN(new Date(prevCheckInAt).getTime())) {
+    item.checkInAt = new Date(prevCheckInAt.getTime());
+    return;
+  }
+  if (item._id) {
+    try {
+      const raw = await Attendance.collection.findOne(
+        { _id: item._id },
+        { projection: { checkInAt: 1, checkInTime: 1 } },
+      );
+      const fromRaw = raw && (raw.checkInAt || raw.checkInTime);
+      if (fromRaw) {
+        item.checkInAt = new Date(fromRaw);
+        return;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  const anchor = dayStartForPunch || day;
+  if (anchor && !Number.isNaN(anchor.getTime())) {
+    item.checkInAt = new Date(anchor.getTime());
+    return;
+  }
+  item.checkInAt = new Date();
+}
+
 async function listAttendance(req, res, next) {
   try {
     const companyId = await getCompanyIdForAdmin(req.admin._id);
@@ -28,7 +96,25 @@ async function listAttendance(req, res, next) {
     if (req.query.userId && mongoose.Types.ObjectId.isValid(String(req.query.userId))) {
       q.userId = req.query.userId;
     }
-    const items = await Attendance.find(q).sort({ checkInAt: -1 }).limit(200).lean();
+    const fromKey = normalizeDayKey(req.query.from);
+    const toKey = normalizeDayKey(req.query.to);
+    if (fromKey && toKey) {
+      const rangeStart = normalizeDateOnly(req.query.from);
+      const rangeEnd = endOfDay(normalizeDateOnly(req.query.to));
+      if (rangeStart && rangeEnd && !Number.isNaN(rangeStart.getTime()) && !Number.isNaN(rangeEnd.getTime())) {
+        q.$or = [
+          { attendanceDayKey: { $gte: fromKey, $lte: toKey } },
+          { attendanceDate: { $gte: rangeStart, $lte: rangeEnd } },
+        ];
+      } else {
+        q.attendanceDayKey = { $gte: fromKey, $lte: toKey };
+      }
+    }
+    const limit = fromKey && toKey ? 500 : 200;
+    const items = await Attendance.find(q)
+      .sort({ attendanceDayKey: 1, checkInAt: -1 })
+      .limit(limit)
+      .lean();
     return res.json({ items });
   } catch (e) {
     return next(e);
@@ -134,8 +220,42 @@ async function checkIn(req, res, next) {
     if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
       return res.status(400).json({ message: 'userId is required.' });
     }
-    const user = await User.findOne({ _id: userId, companyId }).select('_id').lean();
+    const user = await User.findOne({ _id: userId, companyId })
+      .select('_id branchId attendanceGeofenceEnabled')
+      .lean();
     if (!user) return res.status(400).json({ message: 'User not in company.' });
+    const geofenceEnabledForEmployee = user.attendanceGeofenceEnabled !== false;
+    if (geofenceEnabledForEmployee) {
+      if (!String(user.branchId || '').trim()) {
+        return res.status(400).json({ message: 'User has no branch assigned. Assign a branch for geofence punch-in.' });
+      }
+      const company = await Company.findById(companyId).select('branches').lean();
+      const branch = (company?.branches || []).find((b) => String(b?._id || '') === String(user.branchId || ''));
+      if (!branch) {
+        return res.status(400).json({ message: 'Assigned branch not found for this user.' });
+      }
+      const geofence = branch.geofence && typeof branch.geofence === 'object' ? branch.geofence : {};
+      const branchGeofenceEnabled = geofence.enabled !== false;
+      if (branchGeofenceEnabled) {
+        const glat = Number(geofence.lat);
+        const glng = Number(geofence.lng);
+        const radiusM = Math.max(10, Number(geofence.radiusM) || 150);
+        const ulat = Number(lat);
+        const ulng = Number(lng);
+        if (!Number.isFinite(glat) || !Number.isFinite(glng)) {
+          return res.status(400).json({ message: 'Branch geofence is not configured (missing latitude/longitude).' });
+        }
+        if (!Number.isFinite(ulat) || !Number.isFinite(ulng)) {
+          return res.status(400).json({ message: 'Location is required for geofence-enabled punch-in.' });
+        }
+        const distM = haversineDistanceMeters(ulat, ulng, glat, glng);
+        if (distM > radiusM) {
+          return res.status(403).json({
+            message: `Outside branch geofence radius (${Math.round(distM)}m > ${Math.round(radiusM)}m). Punch in within your branch radius.`,
+          });
+        }
+      }
+    }
     const open = await Attendance.findOne({ userId, companyId, checkOutAt: null }).sort({ checkInAt: -1 });
     if (open) {
       return res.status(409).json({ message: 'User already checked in. Check out first.', item: open });
@@ -232,7 +352,9 @@ async function markStatus(req, res, next) {
       loginTime,
       logoutTime,
       leaveKind,
+      approvalAction,
     } = req.body;
+    const timesOnly = Boolean(req.body.timesOnly);
     if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
       return res.status(400).json({ message: 'userId is required.' });
     }
@@ -249,9 +371,14 @@ async function markStatus(req, res, next) {
     }
 
     const statusNorm = String(status || '').toUpperCase().trim();
-    if (!['PRESENT', 'ABSENT', 'LEAVE', 'HOLIDAY'].includes(statusNorm)) {
-      return res.status(400).json({ message: 'Invalid status.' });
+    if (!timesOnly) {
+      if (!['PRESENT', 'ABSENT', 'LEAVE', 'HOLIDAY'].includes(statusNorm)) {
+        return res.status(400).json({ message: 'Invalid status.' });
+      }
     }
+
+    const approvalActionNorm = String(approvalAction || '').toLowerCase().trim();
+    const hasDecisionAction = approvalActionNorm === 'approved' || approvalActionNorm === 'rejected';
 
     const dayKey = normalizeDayKey(date);
     if (!dayKey) {
@@ -262,7 +389,8 @@ async function markStatus(req, res, next) {
     console.log('[Attendance][api] POST /attendance/mark', {
       adminId: String(req.admin?._id || ''),
       userId: String(userId),
-      status: statusNorm,
+      timesOnly,
+      status: timesOnly ? '(unchanged)' : statusNorm,
       date,
       checkInAt: req.body.checkInAt,
       checkInAtMs: req.body.checkInAtMs,
@@ -276,6 +404,9 @@ async function markStatus(req, res, next) {
     let item = await resolveSingleDayAttendanceDoc(companyId, userId, dayKey, day, dayEnd);
 
     if (!item) {
+      if (timesOnly) {
+        return res.status(400).json({ message: 'No attendance row for this day to update.' });
+      }
       item = new Attendance({
         companyId,
         userId,
@@ -283,7 +414,12 @@ async function markStatus(req, res, next) {
         attendanceDate: day,
         checkInAt: day,
         dayStatus: statusNorm,
+        status: statusNorm,
         method: 'manual',
+        approval: {
+          status: 'pending',
+          requestedBy: req.admin?._id || undefined,
+        },
       });
     }
 
@@ -339,26 +475,33 @@ async function markStatus(req, res, next) {
     });
 
     item.attendanceDayKey = dayKey;
-    item.dayStatus = statusNorm;
+    if (!timesOnly) {
+      item.dayStatus = statusNorm;
+      item.status = statusNorm;
+    }
     item.note = note || '';
-    if (statusNorm === 'LEAVE') {
+    if (!item.approval || typeof item.approval !== 'object') item.approval = {};
+    if (hasDecisionAction) {
+      item.approval.status = approvalActionNorm;
+      item.approval.decidedBy = req.admin?._id || undefined;
+      item.approval.decidedByName = String(req.admin?.name || '').trim();
+      item.approval.decidedAt = new Date();
+    } else if (!item.approval.status || item.approval.status === 'none') {
+      item.approval.status = 'pending';
+      item.approval.requestedBy = req.admin?._id || undefined;
+    }
+    if (!timesOnly && statusNorm === 'LEAVE') {
       const lk = String(leaveKind || '').toLowerCase();
       if (lk !== 'paid' && lk !== 'unpaid') {
         return res.status(400).json({ message: 'Leave requires leaveKind: paid or unpaid.' });
       }
       item.leaveKind = lk;
-    } else {
+    } else if (!timesOnly) {
       item.leaveKind = null;
     }
-    if (inTime) item.checkInAt = inTime;
-    if (outTime) item.checkOutAt = outTime;
-    if (dayStartForPunch) item.attendanceDate = dayStartForPunch;
-    if (item.checkInAt && item.checkOutAt) {
-      item.minutesWorked = Math.max(
-        0,
-        Math.round((item.checkOutAt.getTime() - item.checkInAt.getTime()) / 60000),
-      );
-    }
+    const prevCheckInAt = item.checkInAt ? new Date(item.checkInAt.getTime()) : null;
+    applyMarkPunchFields(item, inTime, outTime, loginTime, dayStartForPunch);
+    await ensureCheckInAtPersistable(item, { prevCheckInAt, dayStartForPunch, day });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         await item.save();
@@ -368,26 +511,33 @@ async function markStatus(req, res, next) {
         item = await resolveSingleDayAttendanceDoc(companyId, userId, dayKey, day, dayEnd);
         if (!item) throw err;
         item.attendanceDayKey = dayKey;
-        item.dayStatus = statusNorm;
+        if (!timesOnly) {
+          item.dayStatus = statusNorm;
+          item.status = statusNorm;
+        }
         item.note = note || '';
-        if (statusNorm === 'LEAVE') {
+        if (!item.approval || typeof item.approval !== 'object') item.approval = {};
+        if (hasDecisionAction) {
+          item.approval.status = approvalActionNorm;
+          item.approval.decidedBy = req.admin?._id || undefined;
+          item.approval.decidedByName = String(req.admin?.name || '').trim();
+          item.approval.decidedAt = new Date();
+        } else if (!item.approval.status || item.approval.status === 'none') {
+          item.approval.status = 'pending';
+          item.approval.requestedBy = req.admin?._id || undefined;
+        }
+        if (!timesOnly && statusNorm === 'LEAVE') {
           const lk = String(leaveKind || '').toLowerCase();
           if (lk !== 'paid' && lk !== 'unpaid') {
             return res.status(400).json({ message: 'Leave requires leaveKind: paid or unpaid.' });
           }
           item.leaveKind = lk;
-        } else {
+        } else if (!timesOnly) {
           item.leaveKind = null;
         }
-        if (inTime) item.checkInAt = inTime;
-        if (outTime) item.checkOutAt = outTime;
-        if (dayStartForPunch) item.attendanceDate = dayStartForPunch;
-        if (item.checkInAt && item.checkOutAt) {
-          item.minutesWorked = Math.max(
-            0,
-            Math.round((item.checkOutAt.getTime() - item.checkInAt.getTime()) / 60000),
-          );
-        }
+        const prevRetry = item.checkInAt ? new Date(item.checkInAt.getTime()) : null;
+        applyMarkPunchFields(item, inTime, outTime, loginTime, dayStartForPunch);
+        await ensureCheckInAtPersistable(item, { prevCheckInAt: prevRetry, dayStartForPunch, day });
       }
     }
     // eslint-disable-next-line no-console
@@ -411,6 +561,8 @@ async function bulkMarkStatus(req, res, next) {
     if (!companyId) return res.status(400).json({ message: 'Complete company setup first.' });
     const { userIds = [], status, date, leaveKind } = req.body;
     const statusNorm = String(status || '').toUpperCase().trim();
+    const approvalActionNorm = String(req.body.approvalAction || '').toLowerCase().trim();
+    const hasDecisionAction = approvalActionNorm === 'approved' || approvalActionNorm === 'rejected';
     if (!['PRESENT', 'ABSENT', 'LEAVE', 'HOLIDAY'].includes(statusNorm)) {
       return res.status(400).json({ message: 'Invalid status.' });
     }
@@ -467,10 +619,25 @@ async function bulkMarkStatus(req, res, next) {
           attendanceDate: day,
           checkInAt: day,
           method: 'manual',
+          approval: {
+            status: 'pending',
+            requestedBy: req.admin?._id || undefined,
+          },
         });
       }
       item.attendanceDayKey = dayKey;
       item.dayStatus = statusNorm;
+      item.status = statusNorm;
+      if (!item.approval || typeof item.approval !== 'object') item.approval = {};
+      if (hasDecisionAction) {
+        item.approval.status = approvalActionNorm;
+        item.approval.decidedBy = req.admin?._id || undefined;
+        item.approval.decidedByName = String(req.admin?.name || '').trim();
+        item.approval.decidedAt = new Date();
+      } else if (!item.approval.status || item.approval.status === 'none') {
+        item.approval.status = 'pending';
+        item.approval.requestedBy = req.admin?._id || undefined;
+      }
       if (statusNorm === 'LEAVE') {
         item.leaveKind = leaveKindNorm;
       } else {

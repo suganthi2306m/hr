@@ -13,7 +13,7 @@ function ProfileGlyph() {
 }
 
 function ProfileMenu() {
-  const { admin } = useAuth();
+  const { admin, logout } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -94,6 +94,17 @@ function ProfileMenu() {
               }}
             >
               Settings
+            </button>
+            <button
+              type="button"
+              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left text-sm font-semibold text-white hover:bg-white/10"
+              onClick={() => {
+                setOpen(false);
+                logout();
+                navigate('/login');
+              }}
+            >
+              Logout
             </button>
           </div>
         </div>

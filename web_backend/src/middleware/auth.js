@@ -17,6 +17,9 @@ async function auth(req, _res, next) {
       error.status = 401;
       throw error;
     }
+    if (!admin.role) {
+      admin.role = 'admin';
+    }
     if (admin.isActive === false) {
       const error = new Error('Account is inactive. Please contact support.');
       error.status = 403;

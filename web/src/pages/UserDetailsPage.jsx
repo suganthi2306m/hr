@@ -2,55 +2,24 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import apiClient from '../api/client';
-import { formatAttendanceTimeShort } from '../utils/attendanceTime';
 import UiSelect from '../components/common/UiSelect';
 import { USER_ROLES } from '../constants/rbac';
-
-function toDayKey(v) {
-  return dayjs(v).format('YYYY-MM-DD');
-}
-
-function buildAttendanceByDay(records) {
-  const byDay = new Map();
-  (records || []).forEach((r) => {
-    const k = toDayKey(r.checkInAt || r.createdAt);
-    const prev = byDay.get(k);
-    if (!prev) {
-      byDay.set(k, { ...r });
-      return;
-    }
-    const prevIn = dayjs(prev.checkInAt || prev.createdAt).valueOf();
-    const curIn = dayjs(r.checkInAt || r.createdAt).valueOf();
-    const earliest = curIn < prevIn ? r : prev;
-    const latestOut = [prev.checkOutAt, r.checkOutAt]
-      .filter(Boolean)
-      .map((t) => dayjs(t))
-      .sort((a, b) => a.valueOf() - b.valueOf())
-      .at(-1);
-    byDay.set(k, {
-      ...earliest,
-      checkOutAt: latestOut ? latestOut.toISOString() : earliest.checkOutAt || null,
-      minutesWorked: Number(prev.minutesWorked || 0) + Number(r.minutesWorked || 0),
-    });
-  });
-  return byDay;
-}
-
-function buildLeaveByDay(items) {
-  const out = new Map();
-  (items || []).forEach((lv) => {
-    let cur = dayjs(lv.startDate).startOf('day');
-    const end = dayjs(lv.endDate).startOf('day');
-    if (!cur.isValid() || !end.isValid()) return;
-    while (cur.valueOf() <= end.valueOf()) {
-      const k = cur.format('YYYY-MM-DD');
-      const old = out.get(k);
-      if (!old || old.status === 'pending') out.set(k, lv);
-      cur = cur.add(1, 'day');
-    }
-  });
-  return out;
-}
+import { formatShiftRange } from '../utils/shiftTime';
+import { EMPLOYEE_PROFILE_SECTIONS, mergeEmployeeProfile } from '../constants/employeeProfile';
+import CustomFieldDisplay from '../components/customFields/CustomFieldDisplay';
+import { normalizeWeeklyOffPolicy } from '../utils/weeklyOff';
+import {
+  buildAttendanceByDay,
+  buildCalendarDays,
+  buildLeaveByDay,
+  countWorkingDaysInGrid,
+  fetchRangeForAnchor,
+  getOpsCalendarCellMeta,
+  sumMinutesWorkedForKeys,
+} from '../utils/attendanceCalendar';
+import { buildCompanyHolidayByDay, holidaysApplicableToBranch } from '../utils/companyHolidays';
+import AttendanceStatCards from '../components/attendance/AttendanceStatCards';
+import AttendanceCalendarGrid from '../components/attendance/AttendanceCalendarGrid';
 
 function statusChip(status) {
   if (status === 'approved') return 'bg-emerald-100 text-emerald-800';
@@ -58,32 +27,24 @@ function statusChip(status) {
   return 'bg-amber-100 text-amber-800';
 }
 
-function getAttendanceDayMeta({ date, inMonth, att, leave }) {
-  if (!inMonth) return { key: 'out', label: '', className: '' };
-  if (date.day() === 0) {
-    return { key: 'holiday', label: 'Holiday', className: 'bg-violet-100 text-violet-800' };
-  }
-  if (leave) {
-    const leaveLabel = leave.status === 'approved' ? 'Leave' : `Leave (${leave.status})`;
-    return { key: 'leave', label: leaveLabel, className: statusChip(leave.status) };
-  }
-  if (att) {
-    return { key: 'present', label: 'Present', className: 'bg-emerald-100 text-emerald-800' };
-  }
-  if (date.endOf('day').isBefore(dayjs())) {
-    return { key: 'absent', label: 'Absent', className: 'bg-rose-100 text-rose-800' };
-  }
-  return { key: 'future', label: '', className: '' };
-}
+const USER_DETAIL_TABS = [
+  { id: 'personalInfo', label: 'Personal Info' },
+  { id: 'generalInfo', label: 'General Info' },
+  { id: 'attendance', label: 'Attendance' },
+  { id: 'leave', label: 'Leave' },
+  { id: 'visits', label: 'Visits' },
+];
 
 function UserDetailsPage() {
   const navigate = useNavigate();
   const { setGlobalSearch } = useOutletContext() || {};
   const { id } = useParams();
-  const [activeTab, setActiveTab] = useState('profile');
+  const [activeTab, setActiveTab] = useState('personalInfo');
+  const [allUsers, setAllUsers] = useState([]);
+  const [company, setCompany] = useState(null);
   const [user, setUser] = useState(null);
   const [isProfileEditing, setIsProfileEditing] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'field_agent', isActive: true });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'field_agent', shiftId: '', isActive: true });
   const [attendance, setAttendance] = useState([]);
   const [leaves, setLeaves] = useState([]);
   const [visits, setVisits] = useState([]);
@@ -100,18 +61,21 @@ function UserDetailsPage() {
     setLoading(true);
     setError('');
     try {
-      const [{ data: usersData }, { data: attendanceData }, { data: leavesData }, { data: visitsData }] = await Promise.all([
-        apiClient.get('/users'),
-        apiClient.get(`/ops/attendance?userId=${encodeURIComponent(id)}`),
-        apiClient.get(`/ops/leaves?userId=${encodeURIComponent(id)}`),
-        apiClient.get('/company-visits/company', {
-          params: {
-            userId: id,
-            limit: 100,
-          },
-        }),
-      ]);
+      const [{ data: usersData }, { data: companyData }, , { data: leavesData }, { data: visitsData }] = await Promise.all([
+          apiClient.get('/users'),
+          apiClient.get('/company'),
+          apiClient.get(`/ops/attendance?userId=${encodeURIComponent(id)}`),
+          apiClient.get(`/ops/leaves?userId=${encodeURIComponent(id)}`),
+          apiClient.get('/company-visits/company', {
+            params: {
+              userId: id,
+              limit: 100,
+            },
+          }),
+        ]);
       const users = Array.isArray(usersData?.items) ? usersData.items : [];
+      setAllUsers(users);
+      setCompany(companyData?.company || null);
       const found = users.find((u) => String(u._id) === String(id)) || null;
       setUser(found);
       if (found) {
@@ -120,14 +84,14 @@ function UserDetailsPage() {
           email: found.email || '',
           phone: found.phone || '',
           role: found.role || 'field_agent',
+          shiftId: found.shiftId ? String(found.shiftId) : '',
           isActive: Boolean(found.isActive),
         });
       }
-      setAttendance(Array.isArray(attendanceData?.items) ? attendanceData.items : []);
       setLeaves(Array.isArray(leavesData?.items) ? leavesData.items : []);
       setVisits(Array.isArray(visitsData?.items) ? visitsData.items : []);
     } catch (e) {
-      setError(e.response?.data?.message || 'Unable to load user details.');
+      setError(e.response?.data?.message || 'Unable to load employee details.');
     } finally {
       setLoading(false);
     }
@@ -139,13 +103,55 @@ function UserDetailsPage() {
   }, [id]);
 
   useEffect(() => {
+    if (!id) return undefined;
+    let cancelled = false;
+    (async () => {
+      const { from, to } = fetchRangeForAnchor(selectedDate, 'month');
+      try {
+        const { data } = await apiClient.get('/ops/attendance', { params: { userId: id, from, to } });
+        if (!cancelled) setAttendance(Array.isArray(data?.items) ? data.items : []);
+      } catch {
+        if (!cancelled) setAttendance([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, selectedDate]);
+
+  useEffect(() => {
     if (typeof setGlobalSearch !== 'function') return undefined;
     setGlobalSearch('');
     return () => setGlobalSearch('');
   }, [setGlobalSearch]);
 
+  const weeklyOffPolicy = useMemo(() => normalizeWeeklyOffPolicy(company?.orgSetup?.weeklyOff), [company]);
+
+  const companyHolidayByDay = useMemo(() => {
+    const list = holidaysApplicableToBranch(company?.orgSetup?.holidays, user?.branchId);
+    return buildCompanyHolidayByDay(list);
+  }, [company?.orgSetup?.holidays, user?.branchId]);
+
   const attendanceByDay = useMemo(() => buildAttendanceByDay(attendance), [attendance]);
   const leaveByDay = useMemo(() => buildLeaveByDay(leaves), [leaves]);
+  const calendarDays = useMemo(
+    () => buildCalendarDays(selectedDate, 'month', attendanceByDay, leaveByDay, companyHolidayByDay),
+    [selectedDate, attendanceByDay, leaveByDay, companyHolidayByDay],
+  );
+  const attendanceStats = useMemo(() => {
+    const present = calendarDays.filter((d) => d.inRange && getOpsCalendarCellMeta(d, weeklyOffPolicy).tone === 'present').length;
+    const absent = calendarDays.filter((d) => d.inRange && getOpsCalendarCellMeta(d, weeklyOffPolicy).tone === 'absent').length;
+    const leave = calendarDays.filter((d) => {
+      if (!d.inRange) return false;
+      const t = getOpsCalendarCellMeta(d, weeklyOffPolicy).tone;
+      return t === 'leave' || t === 'pending';
+    }).length;
+    const workingDays = countWorkingDaysInGrid(calendarDays, weeklyOffPolicy);
+    const keysInRange = calendarDays.filter((d) => d.inRange).map((d) => d.key);
+    const workedMinutes = sumMinutesWorkedForKeys(attendanceByDay, keysInRange);
+    const expectedMinutes = workingDays * 8 * 60;
+    return { present, absent, leave, workingDays, workedMinutes, expectedMinutes };
+  }, [calendarDays, attendanceByDay, weeklyOffPolicy]);
   const filteredVisits = useMemo(() => {
     return visits
       .filter((v) => !visitStatus || String(v.status || '').toLowerCase() === visitStatus)
@@ -161,26 +167,6 @@ function UserDetailsPage() {
       });
   }, [visits, visitStatus, visitDateFrom, visitDateTo]);
 
-  const calendarDays = useMemo(() => {
-    const first = dayjs(selectedDate).startOf('month');
-    const start = first.startOf('week');
-    const end = first.endOf('month').endOf('week');
-    const days = [];
-    let cur = start;
-    while (cur.valueOf() <= end.valueOf()) {
-      const key = cur.format('YYYY-MM-DD');
-      days.push({
-        date: cur,
-        key,
-        inMonth: cur.month() === first.month(),
-        att: attendanceByDay.get(key) || null,
-        leave: leaveByDay.get(key) || null,
-      });
-      cur = cur.add(1, 'day');
-    }
-    return days;
-  }, [selectedDate, attendanceByDay, leaveByDay]);
-
   const saveProfile = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -192,20 +178,58 @@ function UserDetailsPage() {
         email: form.email.trim().toLowerCase(),
         phone: form.phone.trim(),
         role: form.role,
+        shiftId: form.shiftId || '',
         isActive: form.isActive,
       });
-      setMessage('Profile updated.');
+      setMessage('Details saved.');
       setIsProfileEditing(false);
       await loadAll();
     } catch (e2) {
-      setError(e2.response?.data?.message || 'Unable to update profile.');
+      setError(e2.response?.data?.message || 'Unable to update employee.');
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <p className="text-sm text-slate-500">Loading user details...</p>;
-  if (!user) return <p className="alert-error">User not found.</p>;
+  const employeeProfile = useMemo(() => mergeEmployeeProfile(user?.employeeProfile), [user]);
+
+  const shiftOptions = useMemo(
+    () => [{ value: '', label: 'No shift' }, ...(company?.orgSetup?.shifts || []).map((s) => ({ value: String(s._id), label: s.name }))],
+    [company],
+  );
+
+  const userShift = useMemo(() => {
+    const sid = user?.shiftId != null ? String(user.shiftId).trim() : '';
+    if (!sid || !company?.orgSetup?.shifts?.length) return null;
+    return company.orgSetup.shifts.find((s) => String(s._id) === sid) || null;
+  }, [user, company]);
+
+  const shiftChip = useMemo(() => {
+    if (!userShift) return { assigned: false, letter: 'NA', timing: 'Not assigned' };
+    const letter = String(userShift.name || 'S').trim().charAt(0).toUpperCase() || 'S';
+    return {
+      assigned: true,
+      letter,
+      timing: formatShiftRange(userShift.startTime, userShift.endTime),
+    };
+  }, [userShift]);
+
+  const attendanceBranchLabel = useMemo(() => {
+    const bid = user?.branchId ? String(user.branchId) : '';
+    const list = Array.isArray(company?.branches) ? company.branches : [];
+    const b = list.find((x) => String(x._id) === bid);
+    if (!b) return '—';
+    return b.code ? `${b.name} (${b.code})` : String(b.name || '—');
+  }, [user, company]);
+
+  const managerName = (userId) => {
+    if (!userId) return '—';
+    const m = allUsers.find((u) => String(u._id) === String(userId));
+    return m ? m.name || m.email : String(userId);
+  };
+
+  if (loading) return <p className="text-sm text-slate-500">Loading employee details...</p>;
+  if (!user) return <p className="alert-error">Employee not found.</p>;
 
   return (
     <section className="space-y-4">
@@ -215,7 +239,7 @@ function UserDetailsPage() {
             type="button"
             className="mt-1 inline-flex h-9 w-9 items-center justify-center rounded-full border border-neutral-200 bg-white text-slate-600 transition hover:bg-neutral-50"
             onClick={() => navigate('/dashboard/users')}
-            title="Back to users"
+            title="Back to employees"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
               <path d="m15 18-6-6 6-6" />
@@ -224,6 +248,7 @@ function UserDetailsPage() {
           <div>
             <p className="text-lg font-bold text-dark">{user.name}</p>
             <p className="text-sm text-slate-500">{user.email}</p>
+            {user.employeeCode ? <p className="text-xs text-slate-500">Employee code: {user.employeeCode}</p> : null}
           </div>
         </div>
         <div>
@@ -238,16 +263,16 @@ function UserDetailsPage() {
       </div>
 
       <div className="inline-flex rounded-full border border-neutral-200 bg-white p-1 shadow-sm">
-        {['profile', 'attendance', 'leave', 'visits'].map((tab) => (
+        {USER_DETAIL_TABS.map((tab) => (
           <button
-            key={tab}
+            key={tab.id}
             type="button"
-            onClick={() => setActiveTab(tab)}
+            onClick={() => setActiveTab(tab.id)}
             className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-              activeTab === tab ? 'bg-primary text-dark shadow-sm' : 'text-slate-600 hover:bg-neutral-100'
+              activeTab === tab.id ? 'bg-primary text-dark shadow-sm' : 'text-slate-600 hover:bg-neutral-100'
             }`}
           >
-            {tab[0].toUpperCase() + tab.slice(1)}
+            {tab.label}
           </button>
         ))}
       </div>
@@ -255,91 +280,256 @@ function UserDetailsPage() {
       {error && <p className="alert-error">{error}</p>}
       {message && <p className="alert-success">{message}</p>}
 
-      {activeTab === 'profile' && (
-        <form className="flux-card grid gap-4 p-5 shadow-panel-lg md:grid-cols-2" onSubmit={saveProfile}>
-          <div className="md:col-span-2 flex justify-end">
-            {!isProfileEditing ? (
-              <button type="button" className="btn-secondary" onClick={() => setIsProfileEditing(true)}>
-                Edit
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setIsProfileEditing(false);
-                  setForm({
+      {activeTab === 'personalInfo' && (
+        <div className="space-y-4">
+          <form className="flux-card grid gap-4 p-5 shadow-panel-lg md:grid-cols-2" onSubmit={saveProfile}>
+            <div className="md:col-span-2 flex justify-end">
+              {!isProfileEditing ? (
+                <button type="button" className="btn-secondary" onClick={() => setIsProfileEditing(true)}>
+                  Edit
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setIsProfileEditing(false);
+                    setForm({
                     name: user.name || '',
                     email: user.email || '',
                     phone: user.phone || '',
                     role: user.role || 'field_agent',
+                    shiftId: user.shiftId ? String(user.shiftId) : '',
                     isActive: Boolean(user.isActive),
                   });
-                }}
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-          <div className="form-field">
-            <label className="form-label-muted">Name</label>
-            <input
-              className="form-input"
-              value={form.name}
-              onChange={(e) => setForm((o) => ({ ...o, name: e.target.value }))}
-              required
-              disabled={!isProfileEditing}
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label-muted">Email</label>
-            <input
-              type="email"
-              className="form-input"
-              value={form.email}
-              onChange={(e) => setForm((o) => ({ ...o, email: e.target.value }))}
-              required
-              disabled={!isProfileEditing}
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label-muted">Phone</label>
-            <input
-              className="form-input"
-              value={form.phone}
-              onChange={(e) => setForm((o) => ({ ...o, phone: e.target.value }))}
-              disabled={!isProfileEditing}
-            />
-          </div>
-          <div className="form-field">
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+            <div className="form-field">
+              <label className="form-label-muted">Name</label>
+              <input
+                className="form-input"
+                value={form.name}
+                onChange={(e) => setForm((o) => ({ ...o, name: e.target.value }))}
+                required
+                disabled={!isProfileEditing}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label-muted">Email</label>
+              <input
+                type="email"
+                className="form-input"
+                value={form.email}
+                onChange={(e) => setForm((o) => ({ ...o, email: e.target.value }))}
+                required
+                disabled={!isProfileEditing}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label-muted">Phone</label>
+              <input
+                className="form-input"
+                value={form.phone}
+                onChange={(e) => setForm((o) => ({ ...o, phone: e.target.value }))}
+                disabled={!isProfileEditing}
+              />
+            </div>
+            <div className="form-field">
             <label className="form-label-muted">Role</label>
             <UiSelect value={form.role} onChange={(value) => setForm((o) => ({ ...o, role: value }))} options={USER_ROLES} disabled={!isProfileEditing} />
           </div>
-          <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="form-checkbox"
-              checked={form.isActive}
-              onChange={(e) => setForm((o) => ({ ...o, isActive: e.target.checked }))}
+          <div className="form-field md:col-span-2">
+            <label className="form-label-muted">Work shift</label>
+            <UiSelect
+              value={form.shiftId}
+              onChange={(value) => setForm((o) => ({ ...o, shiftId: value }))}
+              options={shiftOptions}
               disabled={!isProfileEditing}
             />
-            Active
-          </label>
-          {isProfileEditing && (
-            <div className="md:col-span-2 flex justify-end">
-              <button type="submit" className="btn-primary" disabled={saving}>
-                {saving ? 'Saving...' : 'Save profile'}
-              </button>
+            <p className="mt-1 text-xs text-slate-500">Shown on the Attendance calendar as expected working hours.</p>
+          </div>
+          <label className="md:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="form-checkbox"
+                checked={form.isActive}
+                onChange={(e) => setForm((o) => ({ ...o, isActive: e.target.checked }))}
+                disabled={!isProfileEditing}
+              />
+              Active
+            </label>
+            {isProfileEditing && (
+              <div className="md:col-span-2 flex justify-end">
+                <button type="submit" className="btn-primary" disabled={saving}>
+                  {saving ? 'Saving...' : 'Save details'}
+                </button>
+              </div>
+            )}
+          </form>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-slate-600">HR and onboarding fields stored on this employee.</p>
+            <button type="button" className="btn-primary text-sm" onClick={() => navigate(`/dashboard/users/${id}/employee`)}>
+              Edit full record
+            </button>
+          </div>
+          {EMPLOYEE_PROFILE_SECTIONS.map((section) => (
+            <div key={section.title} className="flux-card p-5 shadow-panel-lg">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-primary">{section.title}</h3>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                {section.fields.map(([key, label]) => {
+                  let val = employeeProfile[key];
+                  if (key === 'reportingManagerId' || key === 'secondaryReportingManagerId') {
+                    val = managerName(val);
+                  } else if (val == null || val === '') {
+                    val = '—';
+                  } else if (typeof val === 'object') {
+                    val = JSON.stringify(val);
+                  } else {
+                    val = String(val);
+                  }
+                  return (
+                    <div key={key} className="min-w-0">
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+                      <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-dark">{val}</dd>
+                    </div>
+                  );
+                })}
+              </dl>
+            </div>
+          ))}
+          {(company?.employeeCustomFieldDefs || []).length > 0 && (
+            <div className="flux-card p-5 shadow-panel-lg">
+              <h3 className="text-sm font-bold uppercase tracking-wide text-primary">Custom fields</h3>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                {(company.employeeCustomFieldDefs || [])
+                  .filter((d) => d.isActive !== false)
+                  .map((d) => (
+                  <div key={d.key} className="min-w-0">
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{d.label}</dt>
+                    <dd className="mt-1 text-sm text-dark">
+                      <CustomFieldDisplay def={d} value={employeeProfile.custom?.[d.key]} />
+                    </dd>
+                  </div>
+                ))}
+              </dl>
             </div>
           )}
-        </form>
+          <div className="flux-card overflow-auto p-5 shadow-panel-lg">
+            <h3 className="text-sm font-bold uppercase tracking-wide text-primary">Work experience</h3>
+            {!employeeProfile.workExperience?.length ? (
+              <p className="mt-3 text-sm text-slate-500">No entries.</p>
+            ) : (
+              <table className="mt-4 min-w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-slate-500">
+                    <th className="py-2 pr-2">Company</th>
+                    <th className="py-2 pr-2">Role</th>
+                    <th className="py-2 pr-2">From</th>
+                    <th className="py-2 pr-2">To</th>
+                    <th className="py-2">Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {employeeProfile.workExperience.map((row, i) => (
+                    <tr key={`we-${i}`} className="border-b border-neutral-100">
+                      <td className="py-2 pr-2">{row.company || '—'}</td>
+                      <td className="py-2 pr-2">{row.role || '—'}</td>
+                      <td className="py-2 pr-2">{row.from || '—'}</td>
+                      <td className="py-2 pr-2">{row.to || '—'}</td>
+                      <td className="py-2 whitespace-pre-wrap">{row.summary || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="flux-card overflow-auto p-5 shadow-panel-lg">
+            <h3 className="text-sm font-bold uppercase tracking-wide text-primary">Education</h3>
+            {!employeeProfile.education?.length ? (
+              <p className="mt-3 text-sm text-slate-500">No entries.</p>
+            ) : (
+              <table className="mt-4 min-w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-slate-500">
+                    <th className="py-2 pr-2">Institute</th>
+                    <th className="py-2 pr-2">Specialization</th>
+                    <th className="py-2 pr-2">Degree</th>
+                    <th className="py-2">Completion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {employeeProfile.education.map((row, i) => (
+                    <tr key={`ed-${i}`} className="border-b border-neutral-100">
+                      <td className="py-2 pr-2">{row.instituteName || '—'}</td>
+                      <td className="py-2 pr-2">{row.specialization || '—'}</td>
+                      <td className="py-2 pr-2">{row.degree || '—'}</td>
+                      <td className="py-2">{row.dateOfCompletion || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'generalInfo' && (
+        <div className="flux-card space-y-4 p-5 shadow-panel-lg">
+          <h3 className="text-sm font-bold uppercase tracking-wide text-primary">General Info</h3>
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Employee code</dt>
+              <dd className="mt-1 text-sm text-dark">{user.employeeCode || '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Branch</dt>
+              <dd className="mt-1 text-sm text-dark">{attendanceBranchLabel}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shift assigned</dt>
+              <dd className="mt-1 text-sm text-dark">
+                {userShift ? (
+                  <>
+                    <p className="font-semibold">{userShift.name}</p>
+                    <p className="text-slate-600">{formatShiftRange(userShift.startTime, userShift.endTime)}</p>
+                  </>
+                ) : (
+                  'No shift assigned'
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Joined date</dt>
+              <dd className="mt-1 text-sm text-dark">
+                {employeeProfile.dateOfJoining && dayjs(employeeProfile.dateOfJoining).isValid()
+                  ? dayjs(employeeProfile.dateOfJoining).format('DD MMM YYYY')
+                  : '—'}
+              </dd>
+            </div>
+          </dl>
+        </div>
       )}
 
       {activeTab === 'attendance' && (
-        <div className="flux-card space-y-3 p-4 shadow-panel-lg">
-          <div className="flex items-end justify-between gap-3">
+        <div className="flux-card space-y-4 p-4 shadow-panel-lg">
+          {userShift ? (
+            <div className="rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 text-sm">
+              <p className="font-bold text-dark">Assigned shift: {userShift.name}</p>
+              <p className="mt-0.5 text-slate-700">{formatShiftRange(userShift.startTime, userShift.endTime)}</p>
+            </div>
+          ) : (
+            <p className="rounded-xl border border-dashed border-neutral-200 bg-flux-panel px-4 py-3 text-sm text-slate-600">
+              No work shift assigned. Set one under Personal Info → Work shift or in Organization setup → Shifts.
+            </p>
+          )}
+          <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="form-field max-w-[260px]">
-              <label className="form-label-muted">Filter date</label>
+              <label className="form-label-muted">Month</label>
               <div className="relative">
                 <input
                   type="date"
@@ -355,45 +545,21 @@ function UserDetailsPage() {
                   </svg>
                 </span>
               </div>
-              <p className="mt-1 text-xs text-slate-500">Showing month of {dayjs(selectedDate).format('DD MMM YYYY')}</p>
+              <p className="mt-1 text-xs text-slate-500">Calendar grid for {dayjs(selectedDate).format('MMMM YYYY')} (Mon–Sun)</p>
             </div>
             <p className="text-sm text-slate-500">
-              Checked-in days: <strong className="text-dark">{attendanceByDay.size}</strong>
+              Days with check-in: <strong className="text-dark">{attendanceByDay.size}</strong>
             </p>
           </div>
-          <div className="grid grid-cols-7 gap-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-              <p key={d}>{d}</p>
-            ))}
-          </div>
-          <div className="grid grid-cols-7 gap-2">
-            {calendarDays.map((d) => {
-              const leave = d.leave;
-              const att = d.att;
-              const meta = getAttendanceDayMeta(d);
-              return (
-                <div
-                  key={d.key}
-                  className={`min-h-[96px] rounded-lg border p-2 text-xs ${
-                    d.inMonth ? 'border-neutral-200 bg-white' : 'border-neutral-100 bg-slate-50 text-slate-400'
-                  }`}
-                >
-                  <p className="font-semibold">{d.date.date()}</p>
-                  {meta.label ? (
-                    <p className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${meta.className}`}>
-                      {meta.label}
-                    </p>
-                  ) : null}
-                  {att ? (
-                    <div className="mt-1 space-y-0.5 text-[11px] text-slate-700">
-                      <p>In: {att.checkInAt ? formatAttendanceTimeShort(att.checkInAt) : '-'}</p>
-                      <p>Out: {att.checkOutAt ? formatAttendanceTimeShort(att.checkOutAt) : '-'}</p>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
+          <AttendanceStatCards
+            present={attendanceStats.present}
+            absent={attendanceStats.absent}
+            leave={attendanceStats.leave}
+            workingDays={attendanceStats.workingDays}
+            workedMinutes={attendanceStats.workedMinutes}
+            expectedMinutes={attendanceStats.expectedMinutes}
+          />
+          <AttendanceCalendarGrid calendarDays={calendarDays} shiftChip={shiftChip} weeklyOffPolicy={weeklyOffPolicy} />
         </div>
       )}
 

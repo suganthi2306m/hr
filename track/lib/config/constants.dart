@@ -3,8 +3,8 @@ class AppConstants {
   /// Default backend for physical devices on same Wi-Fi.
   /// Override at build/run:
   /// flutter run --dart-define=APP_API_BASE_URL=http://<your-laptop-ip>:9001/api
-  static const String _defaultApiBaseUrl = 'https://customerconnect-mobile-api.onrender.com/api';
- //static const String _defaultApiBaseUrl = 'http://192.168.1.33:9001/api';
+ // static const String _defaultApiBaseUrl = 'https://customerconnect-mobile-api.onrender.com/api';
+ static const String _defaultApiBaseUrl = 'http://192.168.1.33:9001/api';
 
   /// General app API (attendance, geo, profile, …).
   static const String baseUrl = String.fromEnvironment(
@@ -52,7 +52,7 @@ class AppConstants {
 
   /// Privacy policy URL (required for Play Store).
   static const String privacyPolicyUrl =
-      'https://doc-hosting.flycricket.io/livetrack-privacy-policy/d4be535f-6a23-4ff6-a5b6-efd3a9977365/privacy';
+      '';
 
   /// Base URL without /api for file/asset paths (e.g. thumbnails, uploads).
   static String get fileBaseUrl {

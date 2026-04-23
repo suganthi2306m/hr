@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import apiClient from '../api/client';
 import LocationLoadingIndicator from '../components/common/LocationLoadingIndicator';
+import SelectionCountBadge from '../components/common/SelectionCountBadge';
 import SlideOverPanel from '../components/common/SlideOverPanel';
 import UiSelect from '../components/common/UiSelect';
-import { PERMISSION_PRESETS, USER_ROLES } from '../constants/rbac';
+import { PERMISSION_PRESETS, USER_ROLES, roleLabel } from '../constants/rbac';
 import { downloadUsersExportXlsx } from '../utils/usersExcelImport';
 
 const defaultPerms = () =>
@@ -21,6 +22,7 @@ function getInitialForm() {
     phone: '',
     role: 'field_agent',
     branchId: '',
+    shiftId: '',
     isActive: true,
     permissions: defaultPerms(),
     kycStatus: '',
@@ -43,10 +45,17 @@ function UsersPage() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [statusFilter, setStatusFilter] = useState('all');
   const [companyBranches, setCompanyBranches] = useState([]);
+  const [companyShifts, setCompanyShifts] = useState([]);
+  const [planUserLimit, setPlanUserLimit] = useState(null);
 
   const branchSelectOptions = useMemo(
     () => [{ value: '', label: 'No branch' }, ...companyBranches.map((b) => ({ value: String(b._id), label: b.name }))],
     [companyBranches],
+  );
+
+  const shiftSelectOptions = useMemo(
+    () => [{ value: '', label: 'No shift' }, ...companyShifts.map((s) => ({ value: String(s._id), label: s.name }))],
+    [companyShifts],
   );
 
   const loadUsers = async () => {
@@ -55,7 +64,7 @@ function UsersPage() {
       const { data } = await apiClient.get('/users');
       setUsers(data.items || []);
     } catch (apiError) {
-      setError(apiError.response?.data?.message || 'Unable to load users.');
+      setError(apiError.response?.data?.message || 'Unable to load employees.');
     } finally {
       setLoading(false);
     }
@@ -72,8 +81,15 @@ function UsersPage() {
         const { data } = await apiClient.get('/company');
         if (cancelled) return;
         setCompanyBranches(Array.isArray(data.company?.branches) ? data.company.branches : []);
+        setCompanyShifts(Array.isArray(data.company?.orgSetup?.shifts) ? data.company.orgSetup.shifts : []);
+        const cap = Number(data.company?.subscription?.maxUsers);
+        setPlanUserLimit(Number.isFinite(cap) && cap > 0 ? cap : null);
       } catch {
-        if (!cancelled) setCompanyBranches([]);
+        if (!cancelled) {
+          setCompanyBranches([]);
+          setCompanyShifts([]);
+          setPlanUserLimit(null);
+        }
       }
     })();
     return () => {
@@ -95,6 +111,10 @@ function UsersPage() {
       );
     });
   }, [globalSearch, users, statusFilter]);
+  const selectedFilteredUsers = useMemo(
+    () => filteredUsers.filter((u) => selectedIds.includes(String(u._id))),
+    [filteredUsers, selectedIds],
+  );
   const allSelected = filteredUsers.length > 0 && filteredUsers.every((u) => selectedIds.includes(String(u._id)));
 
   useEffect(() => {
@@ -116,12 +136,19 @@ function UsersPage() {
     setMessage('');
 
     try {
-      const passwordValue = String(form.password || '').trim();
-      if (!editingId && !passwordValue) {
-        setError('Password is required while creating a user.');
+      if (!editingId) {
+        setError('Use “Add employee” for the full onboarding form.');
         setSaving(false);
         return;
       }
+
+      if (companyBranches.length > 0 && !String(form.branchId || '').trim()) {
+        setError('Branch is required. Choose the attendance branch for this employee.');
+        setSaving(false);
+        return;
+      }
+
+      const passwordValue = String(form.password || '').trim();
 
       const payload = {
         name: form.name.trim(),
@@ -129,6 +156,7 @@ function UsersPage() {
         phone: form.phone.trim(),
         role: form.role,
         branchId: form.branchId || '',
+        shiftId: form.shiftId || '',
         isActive: form.isActive,
         permissions: form.permissions || {},
         kycStatus: form.kycStatus || '',
@@ -138,17 +166,12 @@ function UsersPage() {
         payload.password = passwordValue;
       }
 
-      if (editingId) {
-        await apiClient.put(`/users/${editingId}`, payload);
-        setMessage('User updated successfully.');
-      } else {
-        await apiClient.post('/users', payload);
-        setMessage('User created successfully.');
-      }
+      await apiClient.put(`/users/${editingId}`, payload);
+      setMessage('Employee updated successfully.');
       resetForm();
       await loadUsers();
     } catch (apiError) {
-      setError(apiError.response?.data?.message || 'Unable to save user.');
+      setError(apiError.response?.data?.message || 'Unable to save employee.');
     } finally {
       setSaving(false);
     }
@@ -165,6 +188,7 @@ function UsersPage() {
       phone: user.phone || '',
       role: user.role === 'field_user' ? 'field_agent' : user.role === 'supervisor' ? 'manager' : user.role || 'field_agent',
       branchId: user.branchId ? String(user.branchId) : '',
+      shiftId: user.shiftId ? String(user.shiftId) : '',
       isActive: Boolean(user.isActive),
       permissions: merged,
       kycStatus: user.kycStatus || '',
@@ -176,23 +200,15 @@ function UsersPage() {
     setShowPassword(false);
   };
 
-  const startCreate = () => {
-    setForm(getInitialForm());
-    setEditingId('');
-    setError('');
-    setMessage('');
-    setIsPanelOpen(true);
-  };
-
   const toggleActive = async (user) => {
     setError('');
     setMessage('');
     try {
       await apiClient.put(`/users/${user._id}`, { isActive: !user.isActive });
-      setMessage(`User ${user.isActive ? 'deactivated' : 'activated'} successfully.`);
+      setMessage(`Employee ${user.isActive ? 'deactivated' : 'activated'} successfully.`);
       await loadUsers();
     } catch (apiError) {
-      setError(apiError.response?.data?.message || 'Unable to update user status.');
+      setError(apiError.response?.data?.message || 'Unable to update employee status.');
     }
   };
 
@@ -215,7 +231,7 @@ function UsersPage() {
   const bulkSetActiveState = async (isActive) => {
     const selectedUsers = users.filter((u) => selectedIds.includes(String(u._id)));
     if (!selectedUsers.length) {
-      window.alert('Select users first.');
+      window.alert('Select employees first.');
       return;
     }
     setError('');
@@ -229,6 +245,7 @@ function UsersPage() {
           phone: u.phone || '',
           role: u.role || 'field_agent',
           branchId: u.branchId != null ? String(u.branchId) : '',
+          shiftId: u.shiftId != null ? String(u.shiftId) : '',
           isActive,
           permissions: u.permissions || {},
           kycStatus: u.kycStatus || '',
@@ -241,16 +258,16 @@ function UsersPage() {
     }
     setSelectedIds([]);
     await loadUsers();
-    setMessage(`${done} user(s) updated.`);
+    setMessage(`${done} employee(s) updated.`);
   };
 
   const bulkDelete = async () => {
     const selectedUsers = users.filter((u) => selectedIds.includes(String(u._id)));
     if (!selectedUsers.length) {
-      window.alert('Select users first.');
+      window.alert('Select employees first.');
       return;
     }
-    if (!window.confirm(`Delete ${selectedUsers.length} selected user(s)?`)) return;
+    if (!window.confirm(`Delete ${selectedUsers.length} selected employee(s)?`)) return;
     setError('');
     setMessage('');
     let done = 0;
@@ -264,11 +281,11 @@ function UsersPage() {
     }
     setSelectedIds([]);
     await loadUsers();
-    setMessage(`${done} user(s) deleted.`);
+    setMessage(`${done} employee(s) deleted.`);
   };
 
   const removeUser = async (user) => {
-    const confirmed = window.confirm(`Delete user "${user.name}"?`);
+    const confirmed = window.confirm(`Delete employee "${user.name}"?`);
     if (!confirmed) {
       return;
     }
@@ -276,33 +293,47 @@ function UsersPage() {
     setMessage('');
     try {
       await apiClient.delete(`/users/${user._id}`);
-      setMessage('User deleted successfully.');
+      setMessage('Employee deleted successfully.');
       if (editingId === user._id) {
         resetForm();
       }
       await loadUsers();
     } catch (apiError) {
-      setError(apiError.response?.data?.message || 'Unable to delete user.');
+      setError(apiError.response?.data?.message || 'Unable to delete employee.');
     }
+  };
+
+  const handleAddEmployeeClick = () => {
+    if (planUserLimit != null && users.length >= planUserLimit) {
+      window.alert('You have reached the limit. Kindly upgrade plan.');
+      return;
+    }
+    navigate('/dashboard/users/new');
   };
 
   return (
     <section className="min-w-0 max-w-full space-y-4">
       <div className="flux-card min-w-0 overflow-hidden p-4 shadow-panel-lg">
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h4 className="min-w-0 text-base font-semibold text-dark">All users</h4>
+          <h4 className="min-w-0 text-base font-semibold text-dark">All employees</h4>
           <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row sm:justify-end">
             <button type="button" onClick={() => navigate('/dashboard/users/import')} className="btn-primary">
               Import
             </button>
-            <button type="button" onClick={() => void downloadUsersExportXlsx(filteredUsers)} className="btn-primary">
+            <button
+              type="button"
+              disabled={!selectedFilteredUsers.length && !filteredUsers.length}
+              onClick={() => void downloadUsersExportXlsx(selectedFilteredUsers.length ? selectedFilteredUsers : filteredUsers)}
+              className="btn-primary disabled:cursor-not-allowed disabled:opacity-50"
+              title={selectedFilteredUsers.length ? 'Export selected employees' : 'Export all filtered employees'}
+            >
               Export
             </button>
-            <button type="button" onClick={startCreate} className="btn-primary gap-2">
+            <button type="button" onClick={handleAddEmployeeClick} className="btn-primary gap-2">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              Create user
+              Add employee
             </button>
           </div>
         </div>
@@ -335,7 +366,7 @@ function UsersPage() {
         </div>
         {!!selectedIds.length && (
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-flux-panel px-3 py-2">
-            <span className="text-sm font-semibold text-dark">{selectedIds.length} selected</span>
+            <SelectionCountBadge selectedCount={selectedIds.length} totalCount={filteredUsers.length} />
             <button type="button" className="btn-secondary text-xs" onClick={() => void bulkSetActiveState(true)}>
               Set Active
             </button>
@@ -353,7 +384,7 @@ function UsersPage() {
         )}
 
         {loading ? (
-          <LocationLoadingIndicator label="Loading users..." className="py-3" />
+          <LocationLoadingIndicator label="Loading employees..." className="py-3" />
         ) : (
           <>
             <div className="space-y-3 md:hidden">
@@ -387,7 +418,7 @@ function UsersPage() {
                         user.isActive ? 'border-primary bg-primary' : 'border-primary/50 bg-primary/15'
                       }`}
                       title={user.isActive ? 'Set inactive' : 'Set active'}
-                      aria-label={user.isActive ? 'Set user inactive' : 'Set user active'}
+                      aria-label={user.isActive ? 'Set employee inactive' : 'Set employee active'}
                     >
                       <span
                         className={`h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
@@ -404,7 +435,7 @@ function UsersPage() {
                     <div className="flex justify-between gap-2">
                       <dt className="text-slate-400">Role</dt>
                       <dd className="capitalize text-right font-medium text-dark">
-                        {(user.role || '—').replace(/_/g, ' ')}
+                        {roleLabel(user.role)}
                       </dd>
                     </div>
                     <div className="flex justify-between gap-2">
@@ -419,7 +450,7 @@ function UsersPage() {
                       type="button"
                       onClick={() => startEdit(user)}
                       className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-neutral-300 text-dark hover:bg-neutral-100"
-                      title="Edit user"
+                      title="Quick edit employee"
                     >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
                         <path d="M12 20h9" />
@@ -430,7 +461,7 @@ function UsersPage() {
                       type="button"
                       onClick={() => removeUser(user)}
                       className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-primary bg-primary/10 text-dark hover:bg-primary/20"
-                      title="Delete user"
+                      title="Delete employee"
                     >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
                         <path d="M3 6h18" />
@@ -444,7 +475,7 @@ function UsersPage() {
               ))}
               {!filteredUsers.length && (
                 <p className="rounded-xl border border-dashed border-neutral-200 py-8 text-center text-sm text-slate-500">
-                  No users found.
+                  No employees found.
                 </p>
               )}
             </div>
@@ -455,7 +486,7 @@ function UsersPage() {
                   <thead>
                     <tr className="text-left text-slate-500">
                       <th className="w-10 px-2 py-2">
-                        <input type="checkbox" checked={allSelected} onChange={onToggleSelectAll} aria-label="Select all users" />
+                        <input type="checkbox" checked={allSelected} onChange={onToggleSelectAll} aria-label="Select all employees" />
                       </th>
                       <th className="px-2 py-2">Name</th>
                       <th className="min-w-[10rem] px-2 py-2">Email</th>
@@ -484,7 +515,7 @@ function UsersPage() {
                         <td className="px-2 py-2 font-medium text-dark">{user.name}</td>
                         <td className="max-w-[14rem] break-all px-2 py-2 text-slate-800">{user.email}</td>
                         <td className="whitespace-nowrap px-2 py-2 text-slate-800">{user.phone || '-'}</td>
-                        <td className="px-2 py-2 capitalize text-slate-800">{(user.role || '-').replace(/_/g, ' ')}</td>
+                        <td className="px-2 py-2 text-slate-800">{roleLabel(user.role)}</td>
                         <td className="max-w-[10rem] truncate px-2 py-2 text-slate-800" title={user.companyId?.name}>
                           {user.companyId?.name || '-'}
                         </td>
@@ -499,7 +530,7 @@ function UsersPage() {
                               user.isActive ? 'border-primary bg-primary' : 'border-primary/50 bg-primary/15'
                             }`}
                             title={user.isActive ? 'Set inactive' : 'Set active'}
-                            aria-label={user.isActive ? 'Set user inactive' : 'Set user active'}
+                            aria-label={user.isActive ? 'Set employee inactive' : 'Set employee active'}
                           >
                             <span
                               className={`h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
@@ -517,7 +548,7 @@ function UsersPage() {
                                 startEdit(user);
                               }}
                               className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-neutral-300 text-dark hover:bg-neutral-100"
-                              title="Edit user"
+                              title="Quick edit employee"
                             >
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
                                 <path d="M12 20h9" />
@@ -531,7 +562,7 @@ function UsersPage() {
                                 removeUser(user);
                               }}
                               className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-primary bg-primary/10 text-dark hover:bg-primary/20"
-                              title="Delete user"
+                              title="Delete employee"
                             >
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
                                 <path d="M3 6h18" />
@@ -547,7 +578,7 @@ function UsersPage() {
                     {!filteredUsers.length && (
                       <tr>
                         <td className="py-4 text-slate-500" colSpan={8}>
-                          No users found.
+                          No employees found.
                         </td>
                       </tr>
                     )}
@@ -562,8 +593,8 @@ function UsersPage() {
       <SlideOverPanel
         open={isPanelOpen}
         onClose={resetForm}
-        title={editingId ? 'Edit user' : 'Create user'}
-        description="Manage all field users from one place."
+        title="Quick edit employee"
+        description="Change sign-in email, role, branch, and password. Use the full form for HR onboarding fields."
       >
         <form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
           <div className="form-field md:col-span-1">
@@ -608,7 +639,6 @@ function UsersPage() {
                 placeholder={editingId ? 'Leave blank to keep current' : 'Minimum 6 characters'}
                 className="form-input pr-11"
                 autoComplete="new-password"
-                required={!editingId}
               />
               <button
                 type="button"
@@ -660,7 +690,7 @@ function UsersPage() {
           </div>
           <div className="form-field md:col-span-2">
             <label htmlFor="user-form-branch" className="form-label-muted">
-              Branch (for geofences)
+              Branch{companyBranches.length > 0 ? <span className="text-rose-600"> *</span> : null}
             </label>
             <UiSelect
               id="user-form-branch"
@@ -668,7 +698,23 @@ function UsersPage() {
               onChange={(next) => setForm((old) => ({ ...old, branchId: next }))}
               options={branchSelectOptions}
             />
-            <p className="mt-1 text-xs text-slate-500">Assign the same branch as a geofence so live presence uses that zone.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {companyBranches.length > 0
+                ? 'Required when your company has branches. Used for attendance geofence and HR branch name.'
+                : 'Add branches under Settings → Company → Branches to enable assignment.'}
+            </p>
+          </div>
+          <div className="form-field md:col-span-2">
+            <label htmlFor="user-form-shift" className="form-label-muted">
+              Work shift
+            </label>
+            <UiSelect
+              id="user-form-shift"
+              value={form.shiftId}
+              onChange={(next) => setForm((old) => ({ ...old, shiftId: next }))}
+              options={shiftSelectOptions}
+            />
+            <p className="mt-1 text-xs text-slate-500">Used for attendance expectations on the employee calendar.</p>
           </div>
           <label className="md:col-span-2 flex cursor-pointer items-center gap-3 rounded-xl border border-neutral-200/80 bg-flux-panel px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-neutral-300">
             <input
@@ -679,10 +725,19 @@ function UsersPage() {
             />
             Account is active
           </label>
+          <p className="md:col-span-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
+            Leave password empty to keep the current password.
+          </p>
           {editingId && (
-            <p className="md:col-span-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
-              Leave password empty to keep the current password.
-            </p>
+            <div className="md:col-span-2">
+              <button
+                type="button"
+                className="text-sm font-semibold text-primary hover:underline"
+                onClick={() => navigate(`/dashboard/users/${editingId}/employee`)}
+              >
+                Full employee record (HR fields) →
+              </button>
+            </div>
           )}
           <div className="md:col-span-2 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
             {editingId && (
@@ -691,7 +746,7 @@ function UsersPage() {
               </button>
             )}
             <button type="submit" disabled={saving} className="btn-primary disabled:cursor-not-allowed">
-              {saving ? 'Saving...' : editingId ? 'Update user' : 'Create user'}
+              {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
         </form>

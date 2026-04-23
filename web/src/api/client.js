@@ -74,10 +74,55 @@ export function filterProductionApiBases(urls) {
   return urls.filter((u) => u && !isLoopbackApiUrl(u));
 }
 
+/** Primary host gets a full timeout; fallbacks fail fast so wrong ports do not add 15s each. */
+export const LOGIN_PRIMARY_TIMEOUT_MS = 15000;
+export const LOGIN_FALLBACK_TIMEOUT_MS = 4000;
+
+/** Shorter primary probe in dev when multiple bases exist (e.g. 5000 vs 9001). */
+export function getLoginAttemptTimeoutMs(index, candidateCount) {
+  if (index > 0) return LOGIN_FALLBACK_TIMEOUT_MS;
+  if (import.meta.env.DEV && candidateCount > 1) {
+    return Math.min(LOGIN_PRIMARY_TIMEOUT_MS, 7500);
+  }
+  return LOGIN_PRIMARY_TIMEOUT_MS;
+}
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 15000,
 });
+
+/** Saved API origin from last successful login (or env default). Tried first on sign-in. */
+/** Readable message from axios errors (handles `{ message }`, `{ error: { message } }`, plain text, network). */
+export function getApiErrorMessage(error, fallback = 'Request failed.') {
+  const data = error?.response?.data;
+  if (typeof data === 'string' && data.trim()) return data.trim();
+  if (data && typeof data === 'object') {
+    if (typeof data.message === 'string' && data.message.trim()) return data.message.trim();
+    const nested = data.error;
+    if (nested && typeof nested === 'object' && typeof nested.message === 'string' && nested.message.trim()) {
+      return nested.message.trim();
+    }
+    if (typeof nested === 'string' && nested.trim()) return nested.trim();
+  }
+  const net = String(error?.message || '').trim();
+  if (net) return net;
+  return fallback;
+}
+
+export function getOrderedLoginBaseCandidates() {
+  /** Prefer web admin API (5000) before field API (9001) in dev. */
+  const devHosts = import.meta.env.DEV ? ['http://localhost:5000/api', 'http://localhost:9001/api'] : [];
+  let saved = '';
+  try {
+    saved = String(localStorage.getItem(API_BASE_URL_STORAGE_KEY) || '').trim();
+  } catch {
+    /* ignore */
+  }
+  const raw = [saved, apiClient.defaults.baseURL, API_BASE_URL, ...devHosts].filter(Boolean);
+  const normalized = raw.map((u) => String(u).replace(/\/$/, ''));
+  return filterProductionApiBases([...new Set(normalized)]);
+}
 
 export function setApiBaseUrl(url) {
   if (!url) return;
@@ -100,27 +145,15 @@ apiClient.interceptors.request.use((config) => {
  * @param {object} body
  */
 export async function postPublicAuth(path, body) {
-  const devFallbacks = import.meta.env.DEV
-    ? ['http://localhost:9001/api', 'http://localhost:5000/api']
-    : [];
-  const bases = filterProductionApiBases(
-    Array.from(
-      new Set(
-        [
-          apiClient.defaults.baseURL,
-          API_BASE_URL,
-          localStorage.getItem(API_BASE_URL_STORAGE_KEY),
-          ...devFallbacks,
-        ].filter(Boolean),
-      ),
-    ),
-  );
+  const bases = getOrderedLoginBaseCandidates();
 
   let lastError;
-  for (const base of bases) {
+  for (let i = 0; i < bases.length; i += 1) {
+    const base = bases[i];
+    const timeout = getLoginAttemptTimeoutMs(i, bases.length);
     try {
       const { data } = await axios.post(`${base.replace(/\/$/, '')}${path}`, body, {
-        timeout: 15000,
+        timeout,
       });
       setApiBaseUrl(base);
       return data;

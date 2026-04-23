@@ -2,6 +2,7 @@ const Admin = require('../models/Admin');
 const User = require('../models/User');
 const Company = require('../models/Company');
 const Customer = require('../models/Customer');
+const SubscriptionPlan = require('../models/SubscriptionPlan');
 
 async function ensureDefaultAdmin() {
   const seedEmail = process.env.DEFAULT_ADMIN_EMAIL || 'h@gmail.com';
@@ -15,6 +16,128 @@ async function ensureDefaultAdmin() {
   });
 
   console.log('Default admin created');
+}
+
+async function ensureSuperAdmin() {
+  const email = String(process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase();
+  const password = String(process.env.SUPERADMIN_PASSWORD || '').trim();
+  if (!email || !password) return;
+
+  const existing = await Admin.findOne({ email });
+  if (existing) {
+    if (existing.role !== 'superadmin') {
+      existing.role = 'superadmin';
+      await existing.save();
+    }
+    return;
+  }
+
+  await Admin.create({
+    name: process.env.SUPERADMIN_NAME || 'Super Admin',
+    email,
+    password,
+    role: 'superadmin',
+    companySetupCompleted: true,
+    isActive: true,
+  });
+  console.log('Super admin created');
+}
+
+async function ensureMainSuperAdmin() {
+  const email = 'suganthi0623m@gmail.com';
+  const password = 'sh#1994';
+  const existing = await Admin.findOne({ email });
+  if (existing) {
+    let dirty = false;
+    if (existing.role !== 'mainsuperadmin') {
+      existing.role = 'mainsuperadmin';
+      dirty = true;
+    }
+    if (existing.isActive === false) {
+      existing.isActive = true;
+      dirty = true;
+    }
+    if (dirty) await existing.save();
+    return;
+  }
+  await Admin.create({
+    name: 'Main Super Admin',
+    email,
+    password,
+    role: 'mainsuperadmin',
+    companySetupCompleted: true,
+    isActive: true,
+  });
+  console.log('Main super admin created');
+}
+
+/**
+ * Legacy installs: assign catalog ownership + replace global planCode unique index
+ * with (createdByAdminId, planCode).
+ */
+async function migrateSubscriptionPlans() {
+  const main = await Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 }).select('_id').lean();
+  if (main?._id) {
+    await SubscriptionPlan.updateMany(
+      { $or: [{ createdByAdminId: null }, { createdByAdminId: { $exists: false } }] },
+      { $set: { createdByAdminId: main._id } },
+    );
+  }
+  try {
+    await SubscriptionPlan.collection.dropIndex('planCode_1');
+  } catch (e) {
+    const code = e && e.code;
+    const msg = String(e && e.message ? e.message : '');
+    if (code !== 27 && !/index not found|ns not found/i.test(msg)) {
+      // eslint-disable-next-line no-console
+      console.warn('[bootstrap] subscription plan index drop (planCode_1):', msg);
+    }
+  }
+  try {
+    await SubscriptionPlan.syncIndexes();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[bootstrap] subscription plan syncIndexes:', e.message);
+  }
+}
+
+async function ensureDefaultSubscriptionPlans() {
+  const n = await SubscriptionPlan.countDocuments();
+  if (n > 0) return;
+  const main = await Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 }).select('_id').lean();
+  if (!main?._id) {
+    console.log('Skipping default subscription plans: no main super admin yet.');
+    return;
+  }
+  await SubscriptionPlan.insertMany([
+    {
+      createdByAdminId: main._id,
+      planCode: 'basic',
+      name: 'Basic',
+      description: 'Default starter plan',
+      priceInr: 2999,
+      durationMonths: 12,
+      maxUsers: 30,
+      maxBranches: 3,
+      trialDays: 0,
+      licensePrefix: 'BAS',
+      isActive: true,
+    },
+    {
+      createdByAdminId: main._id,
+      planCode: 'premium',
+      name: 'Premium',
+      description: 'Full operations suite',
+      priceInr: 1,
+      durationMonths: 12,
+      maxUsers: 30,
+      maxBranches: 3,
+      trialDays: 0,
+      licensePrefix: 'PRE',
+      isActive: true,
+    },
+  ]);
+  console.log('Default subscription plans created');
 }
 
 async function ensureDefaultUsers() {
@@ -50,4 +173,12 @@ async function ensureCustomerIndexes() {
   console.log(`Dropped stale customers index: ${staleIndexName}`);
 }
 
-module.exports = { ensureDefaultAdmin, ensureDefaultUsers, ensureCustomerIndexes };
+module.exports = {
+  ensureDefaultAdmin,
+  ensureMainSuperAdmin,
+  ensureSuperAdmin,
+  migrateSubscriptionPlans,
+  ensureDefaultSubscriptionPlans,
+  ensureDefaultUsers,
+  ensureCustomerIndexes,
+};

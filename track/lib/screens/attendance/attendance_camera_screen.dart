@@ -38,6 +38,7 @@ class AttendanceCameraScreen extends StatefulWidget {
     this.officeLng,
     this.officeSiteName = 'Office',
     this.allowedRadiusM = 100,
+    this.attendanceGeofenceEnabled = false,
   });
 
   /// Last-known GPS when available — opens the shutter immediately while a fresh fix runs.
@@ -51,11 +52,15 @@ class AttendanceCameraScreen extends StatefulWidget {
   final String officeSiteName;
   final double allowedRadiusM;
 
+  /// When true, user must be within [allowedRadiusM] of the office/branch anchor to capture.
+  final bool attendanceGeofenceEnabled;
+
   @override
   State<AttendanceCameraScreen> createState() => _AttendanceCameraScreenState();
 }
 
-class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
+class _AttendanceCameraScreenState extends State<AttendanceCameraScreen>
+    with WidgetsBindingObserver {
   /// Matches punch flow — faster fix when user taps refresh.
   static const LocationSettings _refreshLocationSettings = LocationSettings(
     accuracy: LocationAccuracy.medium,
@@ -66,8 +71,6 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
   CameraController? _controller;
   bool _initializing = true;
   bool _capturing = false;
-  bool _frontCamera = true;
-  bool _flashOn = false;
   bool _refreshingLocation = false;
   bool _addressLookupPending = false;
   /// True once we have any fix (seed or fresh) safe for distance + API.
@@ -79,6 +82,7 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _address = widget.initialAddress;
     if (widget.seedPosition != null) {
       _position = widget.seedPosition;
@@ -93,6 +97,24 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
       unawaited(_acquireInitialPosition());
     }
     _initCamera();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final c = _controller;
+    if (c == null) return;
+    if (!c.value.isInitialized) return;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      c.dispose();
+      _controller = null;
+      return;
+    }
+    if (state == AppLifecycleState.resumed && mounted && _controller == null) {
+      unawaited(_initCamera());
+    }
   }
 
   Future<void> _acquireInitialPosition() async {
@@ -165,14 +187,8 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
       final preferred = cameras.where(
         (c) => c.lensDirection == CameraLensDirection.front,
       );
-      if (_frontCamera && preferred.isNotEmpty) {
-        selected = preferred.first;
-      } else {
-        selected = cameras.firstWhere(
-          (c) => c.lensDirection == CameraLensDirection.back,
-          orElse: () => cameras.first,
-        );
-      }
+      // Attendance capture should always use selfie/front camera.
+      if (preferred.isNotEmpty) selected = preferred.first;
       final controller = CameraController(
         selected,
         // Medium keeps selfies sharp enough while cutting upload + compress time vs `high`.
@@ -181,18 +197,7 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
       await controller.initialize();
-      final canTorch = selected.lensDirection == CameraLensDirection.back;
-      if (canTorch && _flashOn) {
-        try {
-          await controller.setFlashMode(FlashMode.torch);
-        } catch (_) {
-          _flashOn = false;
-          await controller.setFlashMode(FlashMode.off);
-        }
-      } else {
-        _flashOn = false;
-        await controller.setFlashMode(FlashMode.off);
-      }
+      await controller.setFlashMode(FlashMode.off);
       if (!mounted) {
         await controller.dispose();
         return;
@@ -205,34 +210,6 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
       if (!mounted) return;
       setState(() => _initializing = false);
     }
-  }
-
-  Future<void> _switchCamera() async {
-    final current = _controller;
-    if (current == null || _capturing) return;
-    setState(() {
-      _frontCamera = !_frontCamera;
-      _initializing = true;
-      _flashOn = false;
-    });
-    await current.dispose();
-    await _initCamera();
-  }
-
-  Future<void> _toggleFlash() async {
-    final c = _controller;
-    if (c == null || !c.value.isInitialized || _capturing) return;
-    if (c.description.lensDirection != CameraLensDirection.back) return;
-    _flashOn = !_flashOn;
-    try {
-      await c.setFlashMode(_flashOn ? FlashMode.torch : FlashMode.off);
-    } catch (_) {
-      _flashOn = false;
-      try {
-        await c.setFlashMode(FlashMode.off);
-      } catch (_) {}
-    }
-    if (mounted) setState(() {});
   }
 
   Future<String> _resolveAddress(Position p) async {
@@ -293,7 +270,59 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
     );
   }
 
+  /// When geofence is on for this user and we have a distance, block capture outside radius.
+  bool _geofenceBlocksCapture() {
+    if (!widget.attendanceGeofenceEnabled) return false;
+    final d = _distanceMToOffice();
+    if (d == null) return false;
+    return d > widget.allowedRadiusM;
+  }
+
   Widget _distanceBanner() {
+    if (!widget.attendanceGeofenceEnabled) {
+      if (_position == null) {
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: LocationLoader(color: AppColors.info, size: 24),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Getting location…',
+                style: TextStyle(
+                  color: Colors.grey.shade800,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline_rounded, color: Colors.blueGrey.shade600, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Office geofence is off for your account — you can check in or out from anywhere.',
+              style: TextStyle(
+                color: Colors.grey.shade800,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     if (_position == null) {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -320,28 +349,13 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
     }
     final d = _distanceMToOffice();
     if (d == null) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.info_outline_rounded, color: Colors.grey.shade600, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Office location is not set on your profile. Distance check is unavailable.',
-              style: TextStyle(
-                color: Colors.grey.shade800,
-                fontSize: 13,
-                height: 1.35,
-              ),
-            ),
-          ),
-        ],
-      );
+      // No branch/office anchor in session — server still validates; no in-camera warning.
+      return const SizedBox.shrink();
     }
-    final km = d / 1000;
     final outside = d > widget.allowedRadiusM;
     final label = widget.officeSiteName.trim().isEmpty ? 'office' : widget.officeSiteName.trim();
     if (outside) {
+      final outsideM = math.max(0, (d - widget.allowedRadiusM).round());
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -358,7 +372,8 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'You are ${km.toStringAsFixed(2)} KMs away from the $label!',
+              'You are out of office by about $outsideM m (allowed radius from $label is '
+              '${widget.allowedRadiusM.round()} m). Move closer to mark attendance.',
               style: const TextStyle(
                 color: Color(0xFFE53935),
                 fontSize: 14,
@@ -394,6 +409,19 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
     final c = _controller;
     final pos = _position;
     if (c == null || !c.value.isInitialized || _capturing || pos == null || !_locationReady) {
+      return;
+    }
+    if (_geofenceBlocksCapture()) {
+      final d = _distanceMToOffice();
+      final outsideM = d == null ? 0 : math.max(0, (d - widget.allowedRadiusM).round());
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'You are out of office by about $outsideM m. ${widget.isCheckout ? 'Check-out' : 'Check-in'} is not allowed.',
+          ),
+        ),
+      );
       return;
     }
     setState(() => _capturing = true);
@@ -482,6 +510,7 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     super.dispose();
   }
@@ -491,7 +520,7 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
     final c = _controller;
     final topPad = MediaQuery.paddingOf(context).top;
     final title = widget.isCheckout ? 'Mark Checkout' : 'Mark Attendance';
-    final backCamera = c?.description.lensDirection == CameraLensDirection.back;
+    final geofenceBlocked = _geofenceBlocksCapture();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -532,20 +561,7 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
                               icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 22),
                             ),
                             const Spacer(),
-                            IconButton(
-                              onPressed: _capturing ? null : _switchCamera,
-                              icon: const Icon(Icons.cameraswitch_rounded, color: Colors.white, size: 26),
-                            ),
-                            IconButton(
-                              onPressed: (_capturing || !backCamera) ? null : _toggleFlash,
-                              icon: Icon(
-                                _flashOn && backCamera
-                                    ? Icons.flash_on_rounded
-                                    : Icons.flash_off_rounded,
-                                color: backCamera ? Colors.white : Colors.white38,
-                                size: 26,
-                              ),
-                            ),
+                            const SizedBox(width: 96),
                           ],
                         ),
                         Padding(
@@ -649,11 +665,17 @@ class _AttendanceCameraScreenState extends State<AttendanceCameraScreen> {
                                   Expanded(
                                     child: Center(
                                       child: Opacity(
-                                        opacity: (!_locationReady || _position == null) && !_capturing
+                                        opacity: (!_locationReady ||
+                                                _position == null ||
+                                                geofenceBlocked) &&
+                                            !_capturing
                                             ? 0.38
                                             : 1,
                                         child: GestureDetector(
-                                          onTap: (_capturing || !_locationReady || _position == null)
+                                          onTap: (_capturing ||
+                                                  !_locationReady ||
+                                                  _position == null ||
+                                                  geofenceBlocked)
                                               ? null
                                               : _capture,
                                           child: Container(

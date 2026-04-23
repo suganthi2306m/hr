@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/widgets/task_brand_icon.dart';
+import 'package:track/navigation/main_shell_navigation.dart';
 
 /// Opens the app menu as a modal bottom sheet (bottom → top), non-scrollable.
 Future<void> showAppDrawerMenu(
@@ -213,9 +214,19 @@ class OvalBottomNavBar extends StatelessWidget {
             unselectedFontSize: 11,
             items: [
               const BottomNavigationBarItem(
+                icon: Icon(Icons.fact_check_outlined),
+                activeIcon: Icon(Icons.fact_check_rounded),
+                label: 'Attendance',
+              ),
+              const BottomNavigationBarItem(
                 icon: Icon(Icons.dashboard_outlined),
                 activeIcon: Icon(Icons.dashboard_rounded),
                 label: 'Dashboard',
+              ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.storefront_outlined),
+                activeIcon: Icon(Icons.storefront_rounded),
+                label: 'Visits',
               ),
               BottomNavigationBarItem(
                 icon: TaskBrandIcon(
@@ -226,17 +237,39 @@ class OvalBottomNavBar extends StatelessWidget {
                   size: 24,
                   color: AppColors.primary,
                 ),
-                label: 'Tasks',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.storefront_outlined),
-                activeIcon: Icon(Icons.storefront_rounded),
-                label: 'Visits',
+                label: 'Leads',
               ),
             ],
           ),
         ),
       ),
     );
+  }
+}
+
+mixin MainShellSwipeNavigation<T extends StatefulWidget> on State<T> {
+  static const double _swipeVelocityThreshold = 240;
+
+  void handleMainShellSwipe(DragEndDetails details, int currentIndex) {
+    final velocity = details.primaryVelocity ?? 0;
+    if (velocity.abs() < _swipeVelocityThreshold) return;
+
+    // Negative velocity = swipe left  -> move forward in shell tabs.
+    // Positive velocity = swipe right -> move backward in shell tabs.
+    if (velocity < 0) {
+      final next = currentIndex + 1;
+      if (next <= 3 && mounted) {
+        pushMainShellByIndex(context, next);
+      }
+      return;
+    }
+
+    if (velocity > 0) {
+      final prev = currentIndex - 1;
+      if (prev >= 0 && mounted) {
+        pushMainShellByIndex(context, prev);
+      }
+      return;
+    }
   }
 }

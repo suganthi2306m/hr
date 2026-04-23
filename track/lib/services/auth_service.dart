@@ -8,6 +8,8 @@ import 'package:dio/dio.dart';
 import '../config/constants.dart';
 import '../utils/error_message_utils.dart';
 import 'api_client.dart';
+import 'attendance_alarm_punch_state.dart';
+import 'attendance_alarm_scheduler.dart';
 import 'attendance_service.dart';
 import 'fcm_service.dart';
 import 'attendance_template_store.dart';
@@ -368,6 +370,10 @@ class AuthService {
 
   Future<void> _clearStoredSession(SharedPreferences prefs) async {
     _api.clearAuthToken();
+    await AttendanceAlarmScheduler.cancelScheduled(
+      FcmService.localNotifications,
+    );
+    await AttendanceAlarmPunchState.clear();
     AttendanceService.invalidateAuthMemo();
     await AttendanceTemplateStore.clear();
     await LiveTrackingService().stopTracking();
@@ -642,6 +648,9 @@ class AuthService {
       }
     }
     _api.clearAuthToken();
+    await AttendanceAlarmScheduler.cancelScheduled(
+      FcmService.localNotifications,
+    );
     AttendanceService.invalidateAuthMemo();
     await AttendanceTemplateStore.clear();
     await LiveTrackingService().stopTracking();

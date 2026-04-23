@@ -4,6 +4,7 @@ import { GoogleMap, Marker, OverlayView, OVERLAY_MOUSE_TARGET } from '@react-goo
 import clsx from 'clsx';
 import apiClient from '../api/client';
 import LocationLoadingIndicator from '../components/common/LocationLoadingIndicator';
+import SelectionCountBadge from '../components/common/SelectionCountBadge';
 import SlideOverPanel from '../components/common/SlideOverPanel';
 import UiSelect from '../components/common/UiSelect';
 import MapLocationPickerScreen from '../components/map/MapLocationPickerScreen';
@@ -37,7 +38,6 @@ const emptyForm = () => ({
   country: '',
   pincode: '',
   address: '',
-  segment: 'lead',
   tags: '',
   geoLat: '',
   geoLng: '',
@@ -56,7 +56,7 @@ function validateMobile(countryDigits, raw) {
   return '';
 }
 
-/** Single search: name, company, email, phone (digits match), address fields, segment, coordinates text. */
+/** Single search: name, company, email, phone (digits match), address fields, coordinates text. */
 function customerMatchesSearch(c, rawQuery) {
   const q = String(rawQuery || '').trim().toLowerCase();
   if (!q) return true;
@@ -73,7 +73,6 @@ function customerMatchesSearch(c, rawQuery) {
     c.state,
     c.country,
     c.pincode,
-    c.segment,
     c.geoLocation?.lat != null ? String(c.geoLocation.lat) : '',
     c.geoLocation?.lng != null ? String(c.geoLocation.lng) : '',
   ]
@@ -110,7 +109,7 @@ function MapCompanyTooltip({ c }) {
     padding: 0,
     color: '#ffffff',
     WebkitTextFillColor: '#ffffff',
-    fontSize: 13,
+    fontSize: '0.8125rem',
     fontWeight: 700,
     lineHeight: 1.35,
     letterSpacing: '0.01em',
@@ -149,6 +148,7 @@ function CustomersPage() {
   const [editingId, setEditingId] = useState('');
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [message, setMessage] = useState('');
   const [mapPickerOpen, setMapPickerOpen] = useState(false);
   const [lastMapPin, setLastMapPin] = useState(null);
 
@@ -180,6 +180,10 @@ function CustomersPage() {
       return true;
     });
   }, [items, customerQuery, statusFilter]);
+  const selectedFilteredCustomers = useMemo(
+    () => filteredDirectory.filter((c) => selectedCustomerIds.includes(String(c._id))),
+    [filteredDirectory, selectedCustomerIds],
+  );
   const directoryTotalPages = Math.max(1, Math.ceil(filteredDirectory.length / PAGE_SIZE));
   const pagedDirectory = useMemo(() => {
     const start = (directoryPage - 1) * PAGE_SIZE;
@@ -357,6 +361,7 @@ function CustomersPage() {
   const submit = async (event) => {
     event.preventDefault();
     setSubmitError('');
+    setMessage('');
     const mobileErr = validateMobile(form.countryCode, form.customerNumber);
     if (mobileErr) {
       setSubmitError(mobileErr);
@@ -394,7 +399,6 @@ function CustomersPage() {
       state: form.state.trim(),
       country: form.country.trim(),
       pincode: form.pincode.trim(),
-      segment: form.segment,
       customerStatus: form.customerStatus === 'inactive' ? 'inactive' : 'active',
       tags: form.tags
         .split(',')
@@ -410,8 +414,10 @@ function CustomersPage() {
     try {
       if (editingId) {
         await apiClient.put(`/customers/${editingId}`, body);
+        setMessage('Customer updated successfully.');
       } else {
         await apiClient.post('/customers', body);
+        setMessage('Customer created successfully.');
       }
       await loadCustomers();
       setForm(emptyForm());
@@ -437,7 +443,6 @@ function CustomersPage() {
       country: item.country || '',
       pincode: item.pincode || '',
       address: item.address || '',
-      segment: item.segment || 'lead',
       tags: Array.isArray(item.tags) ? item.tags.join(', ') : '',
       geoLat: item.geoLocation?.lat != null ? String(item.geoLocation.lat) : '',
       geoLng: item.geoLocation?.lng != null ? String(item.geoLocation.lng) : '',
@@ -467,6 +472,7 @@ function CustomersPage() {
 
   const deleteCustomer = async (id) => {
     await apiClient.delete(`/customers/${id}`);
+    setMessage('Customer deleted successfully.');
     loadCustomers();
   };
 
@@ -525,7 +531,6 @@ function CustomersPage() {
         country: c.country || '',
         customerStatus: status,
       };
-      if (c.segment) body.segment = c.segment;
       if (Array.isArray(c.tags)) body.tags = c.tags;
       if (c.geoLocation?.lat != null && c.geoLocation?.lng != null) body.geoLocation = c.geoLocation;
       try {
@@ -553,7 +558,6 @@ function CustomersPage() {
       country: item.country || '',
       customerStatus: status,
     };
-    if (item.segment) body.segment = item.segment;
     if (Array.isArray(item.tags)) body.tags = item.tags;
     if (item.geoLocation?.lat != null && item.geoLocation?.lng != null) body.geoLocation = item.geoLocation;
     await apiClient.put(`/customers/${item._id}`, body);
@@ -615,6 +619,7 @@ function CustomersPage() {
           Maps failed to load (pick location may not work). {String(mapsLoadError.message || mapsLoadError)}
         </p>
       )}
+      {message ? <p className="alert-success">{message}</p> : null}
 
       {mainTab === 'directory' && (
         <div className="flux-card p-4 shadow-panel-lg">
@@ -665,8 +670,10 @@ function CustomersPage() {
             </button>
             <button
               type="button"
-              onClick={() => void downloadCustomersExportXlsx(filteredDirectory)}
-              className="btn-primary inline-flex shrink-0 items-center gap-2 whitespace-nowrap"
+              disabled={!selectedFilteredCustomers.length && !filteredDirectory.length}
+              onClick={() => void downloadCustomersExportXlsx(selectedFilteredCustomers.length ? selectedFilteredCustomers : filteredDirectory)}
+              className="btn-primary inline-flex shrink-0 items-center gap-2 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
+              title={selectedFilteredCustomers.length ? 'Export selected customers' : 'Export all filtered customers'}
             >
               Export
             </button>
@@ -702,7 +709,7 @@ function CustomersPage() {
           )}
           {!!selectedCustomerIds.length && (
             <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-flux-panel px-3 py-2">
-              <span className="text-sm font-semibold text-dark">{selectedCustomerIds.length} selected</span>
+              <SelectionCountBadge selectedCount={selectedCustomerIds.length} totalCount={filteredDirectory.length} />
               <button type="button" className="btn-secondary text-xs" onClick={() => void bulkSetCustomerStatus('active')}>
                 Set Active
               </button>
@@ -730,8 +737,6 @@ function CustomersPage() {
                   />
                 </th>
                 <th className="px-2 py-2">Company</th>
-                <th className="px-2 py-2">Segment</th>
-                <th className="px-2 py-2">Status</th>
                 <th className="px-2 py-2">Mobile</th>
                 <th className="px-2 py-2">Email</th>
                 <th className="min-w-[12rem] max-w-xs px-2 py-2">Address</th>
@@ -755,34 +760,6 @@ function CustomersPage() {
                   </td>
                   <td className="px-2 py-2 font-medium" title={item.companyName}>
                     {item.companyName || '—'}
-                  </td>
-                  <td className="px-2 py-2">
-                    <span className="rounded-full bg-primary/20 px-2 py-0.5 text-xs font-semibold capitalize text-dark">
-                      {item.segment || 'lead'}
-                    </span>
-                  </td>
-                  <td className="px-2 py-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void updateSingleCustomerStatus(item, isCustomerOperationalActive(item) ? 'inactive' : 'active');
-                      }}
-                      className={clsx(
-                        'inline-flex h-5 w-9 items-center rounded-full border p-0.5 transition',
-                        isCustomerOperationalActive(item)
-                          ? 'border-primary bg-primary'
-                          : 'border-primary/50 bg-primary/15',
-                      )}
-                      aria-label={isCustomerOperationalActive(item) ? 'Set customer inactive' : 'Set customer active'}
-                    >
-                      <span
-                        className={clsx(
-                          'h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform',
-                          isCustomerOperationalActive(item) ? 'translate-x-4' : 'translate-x-0',
-                        )}
-                      />
-                    </button>
                   </td>
                   <td className="px-2 py-2 text-slate-800">
                     {item.countryCode ? `+${item.countryCode} ` : ''}
@@ -848,7 +825,7 @@ function CustomersPage() {
               ))}
               {!pagedDirectory.length && listLoadState.status === 'ok' && (
                 <tr>
-                  <td className="py-8 text-center text-slate-600" colSpan={8}>
+                  <td className="py-8 text-center text-slate-600" colSpan={7}>
                     No customers match your filters.
                   </td>
                 </tr>
@@ -1160,21 +1137,6 @@ function CustomersPage() {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="form-field">
-              <label htmlFor="cust-segment" className="form-label-muted">
-                CRM segment
-              </label>
-              <UiSelect
-                id="cust-segment"
-                value={form.segment}
-                onChange={(next) => setForm((o) => ({ ...o, segment: next }))}
-                options={[
-                  { value: 'lead', label: 'Lead' },
-                  { value: 'active', label: 'Active' },
-                  { value: 'inactive', label: 'Inactive' },
-                ]}
-              />
-            </div>
             <div className="form-field">
               <label htmlFor="cust-tags" className="form-label-muted">
                 Tags (comma separated)

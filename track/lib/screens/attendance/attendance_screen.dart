@@ -5,6 +5,8 @@ import 'package:track/config/app_colors.dart';
 import 'package:track/navigation/main_shell_navigation.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:track/models/attendance_record.dart';
+import 'package:track/services/attendance_alarm_punch_state.dart';
+import 'package:track/services/attendance_alarm_scheduler.dart';
 import 'package:track/services/attendance_service.dart';
 import 'package:track/services/presence_tracking_service.dart';
 import 'package:track/utils/date_display_util.dart';
@@ -21,7 +23,8 @@ class AttendanceScreen extends StatefulWidget {
   State<AttendanceScreen> createState() => _AttendanceScreenState();
 }
 
-class _AttendanceScreenState extends State<AttendanceScreen> {
+class _AttendanceScreenState extends State<AttendanceScreen>
+    with MainShellSwipeNavigation {
   final AttendanceService _service = AttendanceService();
 
   static String _locationLine(AttendanceGeo? g) {
@@ -66,6 +69,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     try {
       await _service.syncPendingOps();
       final rows = await _service.fetchHistoryRecentYears(years: 3);
+      await AttendanceAlarmPunchState.syncFromHistory(rows);
       if (!mounted) return;
       setState(() {
         _history = rows;
@@ -73,6 +77,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       });
       scheduleMicrotask(() {
         unawaited(_syncPresenceTrackingFromHistory());
+        unawaited(AttendanceAlarmScheduler.rescheduleFromServer());
       });
     } catch (e) {
       if (!mounted) return;
@@ -149,7 +154,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       ),
       body: _loading
           ? const AppTabLoadingBody(message: 'Loading attendance…')
-          : RefreshIndicator(
+          : GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragEnd: (details) => handleMainShellSwipe(details, 0),
+              child: RefreshIndicator(
               onRefresh: _load,
               child: ListView(
                 padding: const EdgeInsets.all(16),
@@ -247,10 +255,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     }),
                 ],
               ),
+              ),
             ),
       bottomNavigationBar: OvalBottomNavBar(
         currentIndex: 0,
-        onTap: (index) => pushMainShellByIndex(context, index),
+        onTap: (index) {
+          if (index == 0) return;
+          pushMainShellByIndex(context, index);
+        },
       ),
     );
   }

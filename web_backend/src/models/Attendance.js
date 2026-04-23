@@ -23,9 +23,24 @@ const attendanceSchema = new mongoose.Schema(
       default: 'PRESENT',
       index: true,
     },
+    /** Optional workflow field (e.g. app PENDING); kept in sync with dayStatus on ops /mark when possible. */
+    status: { type: String, index: true },
     /** When dayStatus is LEAVE: paid | unpaid (validated in API). */
     leaveKind: { type: String },
     note: { type: String },
+    /** Regularization approval workflow metadata. */
+    approval: {
+      status: {
+        type: String,
+        enum: ['none', 'pending', 'approved', 'rejected'],
+        default: 'none',
+        index: true,
+      },
+      requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+      decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+      decidedByName: { type: String, default: '' },
+      decidedAt: { type: Date },
+    },
   },
   { timestamps: true },
 );

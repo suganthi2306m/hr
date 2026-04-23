@@ -2,10 +2,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import apiClient, {
-  API_BASE_URL,
   TOKEN_KEY,
   setApiBaseUrl,
-  filterProductionApiBases,
+  getOrderedLoginBaseCandidates,
+  getLoginAttemptTimeoutMs,
 } from '../api/client';
 
 const AuthContext = createContext(null);
@@ -43,21 +43,18 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const normalizedEmail = String(email || '').trim().toLowerCase();
-    const devHosts = import.meta.env.DEV
-      ? ['http://localhost:9001/api', 'http://localhost:5000/api']
-      : [];
-    const baseCandidates = filterProductionApiBases(
-      Array.from(new Set([API_BASE_URL, apiClient.defaults.baseURL, ...devHosts].filter(Boolean))),
-    );
+    const baseCandidates = getOrderedLoginBaseCandidates();
 
     const performLogin = async () => {
       let lastError;
-      for (const baseUrl of baseCandidates) {
+      for (let i = 0; i < baseCandidates.length; i += 1) {
+        const baseUrl = baseCandidates[i];
+        const timeout = getLoginAttemptTimeoutMs(i, baseCandidates.length);
         try {
           const response = await axios.post(
             `${baseUrl}/auth/login`,
             { email: normalizedEmail, password },
-            { timeout: 15000 },
+            { timeout },
           );
           setApiBaseUrl(baseUrl);
           return response;
@@ -80,7 +77,7 @@ export function AuthProvider({ children }) {
         throw error;
       }
       await new Promise((resolve) => {
-        setTimeout(resolve, 600);
+        setTimeout(resolve, 250);
       });
       response = await performLogin();
     }

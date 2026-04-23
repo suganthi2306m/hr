@@ -1,11 +1,24 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/models/attendance_record.dart';
+import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/attendance/attendance_day_detail_screen.dart';
+import 'package:track/screens/profile/profile_screen.dart';
+import 'package:track/screens/settings/settings_screen.dart';
+import 'package:track/services/attendance_alarm_punch_state.dart';
+import 'package:track/services/attendance_alarm_scheduler.dart';
 import 'package:track/services/attendance_service.dart';
+import 'package:track/services/auth_service.dart';
 import 'package:track/utils/date_display_util.dart';
 import 'package:track/widgets/app_feedback.dart';
+import 'package:track/navigation/main_shell_navigation.dart';
+import 'package:track/widgets/app_shell_navigation.dart';
+import 'package:track/widgets/attendance_alarm_sheet.dart';
 
 /// Month-scrolling attendance calendar with stats and per-day rows (fast list + optional cache).
 class AttendanceSummaryScreen extends StatefulWidget {
@@ -15,7 +28,8 @@ class AttendanceSummaryScreen extends StatefulWidget {
   State<AttendanceSummaryScreen> createState() => _AttendanceSummaryScreenState();
 }
 
-class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
+class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
+    with MainShellSwipeNavigation {
   final AttendanceService _service = AttendanceService();
 
   /// Calendar month (day 1, local).
@@ -24,6 +38,9 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
   bool _loading = true;
   List<AttendanceRecord> _records = const [];
   List<LeaveRequestRecord> _leavesAll = const [];
+  String? _shiftTimingLine;
+  Set<int> _weekOffWeekdays = <int>{6, 7};
+  Map<String, String> _holidaysByYmd = const {};
 
   /// Month key `yyyy-MM` → records (avoids refetch when switching months back and forth).
   final Map<String, List<AttendanceRecord>> _recordCache = {};
@@ -31,13 +48,91 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
   Map<DateTime, AttendanceRecord> _byDay = {};
 
   static DateTime _d0(DateTime d) => DateDisplayUtil.dateOnlyLocal(d);
+  static String _ymd(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   @override
   void initState() {
     super.initState();
     final n = DateTime.now();
     _monthFirst = DateTime(n.year, n.month, 1);
+    _loadShiftMeta();
     _loadMonth();
+  }
+
+  Future<void> _loadShiftMeta() async {
+    final meta = await _service.fetchShiftMeta(month: _monthFirst);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('user');
+      if (raw == null || raw.isEmpty) {
+        if (meta != null && mounted) {
+          final weekOff = (meta['weekOffWeekdays'] as List?)
+                  ?.map((e) => int.tryParse(e.toString()))
+                  .whereType<int>()
+                  .toSet() ??
+              <int>{6, 7};
+          setState(() {
+            final start = meta['startTime']?.toString();
+            final end = meta['endTime']?.toString();
+            _shiftTimingLine =
+                (start != null && start.isNotEmpty && end != null && end.isNotEmpty)
+                    ? '$start - $end'
+                    : null;
+            _weekOffWeekdays = weekOff.isEmpty ? <int>{6, 7} : weekOff;
+            final holidaysRaw = (meta['holidays'] as List?) ?? const [];
+            final holidays = <String, String>{};
+            for (final h in holidaysRaw) {
+              if (h is! Map) continue;
+              final key = h['ymd']?.toString() ?? '';
+              if (key.isEmpty) continue;
+              holidays[key] = h['name']?.toString() ?? 'Holiday';
+            }
+            _holidaysByYmd = holidays;
+          });
+        }
+        return;
+      }
+      final map = jsonDecode(raw);
+      if (map is! Map) return;
+      final user = Map<String, dynamic>.from(map);
+      final dynamic shiftRaw = user['shift'];
+      final shift = shiftRaw is Map<String, dynamic>
+          ? shiftRaw
+          : (shiftRaw is Map ? Map<String, dynamic>.from(shiftRaw) : const <String, dynamic>{});
+      final start = (shift['startTime'] ?? shift['start'] ?? user['shiftStartTime'])?.toString();
+      final end = (shift['endTime'] ?? shift['end'] ?? user['shiftEndTime'])?.toString();
+      if (!mounted) return;
+      setState(() {
+        final serverStart = meta?['startTime']?.toString();
+        final serverEnd = meta?['endTime']?.toString();
+        if (serverStart != null &&
+            serverStart.isNotEmpty &&
+            serverEnd != null &&
+            serverEnd.isNotEmpty) {
+          _shiftTimingLine = '$serverStart - $serverEnd';
+        } else if (start != null && start.isNotEmpty && end != null && end.isNotEmpty) {
+          _shiftTimingLine = '$start - $end';
+        } else {
+          _shiftTimingLine = null;
+        }
+        final weekOff = (meta?['weekOffWeekdays'] as List?)
+                ?.map((e) => int.tryParse(e.toString()))
+                .whereType<int>()
+                .toSet() ??
+            <int>{6, 7};
+        _weekOffWeekdays = weekOff.isEmpty ? <int>{6, 7} : weekOff;
+        final holidaysRaw = (meta?['holidays'] as List?) ?? const [];
+        final holidays = <String, String>{};
+        for (final h in holidaysRaw) {
+          if (h is! Map) continue;
+          final key = h['ymd']?.toString() ?? '';
+          if (key.isEmpty) continue;
+          holidays[key] = h['name']?.toString() ?? 'Holiday';
+        }
+        _holidaysByYmd = holidays;
+      });
+    } catch (_) {}
   }
 
   void _reindexByDay() {
@@ -94,9 +189,11 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
         _records = fetched;
       }
       _reindexByDay();
+      await AttendanceAlarmPunchState.syncFromHistory(_records);
       if (mounted) {
         setState(() => _loading = false);
       }
+      unawaited(AttendanceAlarmScheduler.rescheduleFromServer());
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
@@ -118,7 +215,37 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
     final t = DateTime(_monthFirst.year, _monthFirst.month + delta, 1);
     if (delta > 0 && t.isAfter(_currentCap)) return;
     setState(() => _monthFirst = t);
+    _loadShiftMeta();
     _loadMonth();
+  }
+
+  Future<void> _logout() async {
+    await AuthService().logout();
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
+  void _openAppMenu(BuildContext context) {
+    showAppDrawerMenu(
+      context,
+      onProfile: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ProfileScreen()),
+        ).then((_) => _loadMonth());
+      },
+      onSettings: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SettingsScreen()),
+        ).then((_) => _loadMonth());
+      },
+      onLogout: _logout,
+    );
   }
 
   int get _daysInMonth =>
@@ -141,15 +268,28 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
     return '$h:${mm.toString().padLeft(2, '0')} Hrs';
   }
 
+  String _timingLine(AttendanceRecord? r) {
+    if (r == null) return '0:00 Hrs';
+    final checkIn = DateFormat('hh:mm a').format(r.checkInTime);
+    final checkOut = r.checkOutTime != null
+        ? DateFormat('hh:mm a').format(r.checkOutTime!)
+        : '--';
+    return '$checkIn - $checkOut';
+  }
+
   String _rowStatus(DateTime day, AttendanceRecord? r, LeaveRequestRecord? leave) {
     final today = _d0(DateTime.now());
     final d = _d0(day);
     if (d.isAfter(today)) return 'Upcoming';
-    if (leave != null) return 'Leave (${leave.leaveType})';
+    final holiday = _holidaysByYmd[_ymd(d)];
+    if (holiday != null && holiday.isNotEmpty) return 'Holiday';
+    if (leave != null) return 'Leave';
+    final dayStatus = (r?.dayStatus ?? r?.status ?? '').toUpperCase();
+    if (dayStatus == 'HOLIDAY') return 'Holiday';
+    if (dayStatus == 'LEAVE') return 'Leave';
     if (r == null) {
+      if (_weekOffWeekdays.contains(d.weekday)) return 'Week Off';
       if (d == today) return 'Not marked';
-      final w = d.weekday;
-      if (w == DateTime.saturday || w == DateTime.sunday) return 'Weekend';
       return 'Absent';
     }
     switch (r.status.toUpperCase()) {
@@ -166,10 +306,11 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
     }
   }
 
-  ({int present, int absent, int half}) _monthStats() {
+  ({int present, int absent, int half, int weekOff}) _monthStats() {
     var present = 0;
     var absent = 0;
     var half = 0;
+    var weekOffDays = 0;
     final today = _d0(DateTime.now());
     for (var i = 1; i <= _daysInMonth; i++) {
       final day = DateTime(_monthFirst.year, _monthFirst.month, i);
@@ -177,12 +318,16 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
       if (d.isAfter(today)) continue;
       final leave = _approvedLeaveForDay(day);
       final r = _recordFor(day);
-      if (leave != null) {
+      if (_holidaysByYmd.containsKey(_ymd(d)) ||
+          (r?.dayStatus ?? '').toUpperCase() == 'HOLIDAY') {
         continue;
       }
+      if (_weekOffWeekdays.contains(d.weekday)) {
+        weekOffDays++;
+        continue;
+      }
+      if (leave != null) continue;
       if (r == null) {
-        final w = d.weekday;
-        if (w == DateTime.saturday || w == DateTime.sunday) continue;
         absent++;
         continue;
       }
@@ -197,221 +342,294 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen> {
           absent++;
           break;
         default:
-          if (r.checkOutTime != null) present++;
+          // Only `PRESENT` counts toward Present; PENDING / other do not.
           break;
       }
     }
-    return (present: present, absent: absent, half: half);
+    return (present: present, absent: absent, half: half, weekOff: weekOffDays);
   }
 
   @override
   Widget build(BuildContext context) {
     const ink = Color(0xFF1A1A1A);
-    const pageBg = Color(0xFFF0F1F3);
+    const pageBg = Color(0xFFF3F4F6);
     final monthTitle = DateFormat('MMM, yyyy').format(_monthFirst);
     final stats = _monthStats();
 
     return Scaffold(
       backgroundColor: pageBg,
-      appBar: AppBar(
-        title: const Text('Attendance summary'),
-        backgroundColor: Colors.white,
-        foregroundColor: ink,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: () {
-              final key =
-                  '${_monthFirst.year}-${_monthFirst.month.toString().padLeft(2, '0')}';
-              _recordCache.remove(key);
-              _loadMonth();
-            },
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
+      body: SafeArea(
+        bottom: false,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) => handleMainShellSwipe(details, 0),
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
                   color: AppColors.primary,
-                  onRefresh: () async {
-                    final key =
-                        '${_monthFirst.year}-${_monthFirst.month.toString().padLeft(2, '0')}';
-                    _recordCache.remove(key);
-                    await _loadMonth();
-                  },
-                  child: CustomScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    slivers: [
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(14),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.04),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              children: [
-                                IconButton(
-                                  onPressed: _canGoPrev ? () => _goMonth(-1) : null,
-                                  icon: const Icon(Icons.chevron_left_rounded),
-                                  color: ink,
-                                ),
-                                Expanded(
-                                  child: Text(
-                                    monthTitle,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w800,
-                                      color: ink,
-                                      letterSpacing: -0.2,
+                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+                ),
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 14),
+                child: Row(
+                  children: [
+                    IconButton(
+                      onPressed: () => _openAppMenu(context),
+                      icon: Icon(
+                        Icons.menu_rounded,
+                        color: Colors.black.withValues(alpha: 0.85),
+                      ),
+                      tooltip: 'Menu',
+                    ),
+                    const Expanded(
+                      child: Text(
+                        'YOUR ATTENDANCE',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.35,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Attendance alarms',
+                      onPressed: () => showAttendanceAlarmSetupSheet(context),
+                      icon: Icon(
+                        Icons.alarm_rounded,
+                        color: Colors.black.withValues(alpha: 0.82),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Refresh',
+                      onPressed: () {
+                        final key =
+                            '${_monthFirst.year}-${_monthFirst.month.toString().padLeft(2, '0')}';
+                        _recordCache.remove(key);
+                        _loadMonth();
+                      },
+                      icon: Icon(
+                        Icons.refresh_rounded,
+                        color: Colors.black.withValues(alpha: 0.82),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : RefreshIndicator(
+                        color: AppColors.primary,
+                        onRefresh: () async {
+                          final key =
+                              '${_monthFirst.year}-${_monthFirst.month.toString().padLeft(2, '0')}';
+                          _recordCache.remove(key);
+                          await _loadMonth();
+                        },
+                        child: CustomScrollView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                                child: Row(
+                                  children: [
+                                    IconButton(
+                                      onPressed: _canGoPrev ? () => _goMonth(-1) : null,
+                                      icon: const Icon(Icons.chevron_left_rounded),
+                                      color: ink.withValues(alpha: 0.6),
                                     ),
-                                  ),
-                                ),
-                                IconButton(
-                                  onPressed: _canGoNext ? () => _goMonth(1) : null,
-                                  icon: Icon(
-                                    Icons.chevron_right_rounded,
-                                    color: _canGoNext
-                                        ? ink
-                                        : ink.withValues(alpha: 0.25),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                          child: _StatsGrid(
-                            present: stats.present,
-                            absent: stats.absent,
-                            half: stats.half,
-                          ),
-                        ),
-                      ),
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                          child: Text(
-                            'Attendance summary',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              color: ink.withValues(alpha: 0.88),
-                            ),
-                          ),
-                        ),
-                      ),
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                        sliver: SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) {
-                              final day = _daysDescending[index];
-                              final r = _recordFor(day);
-                              final leave = _approvedLeaveForDay(day);
-                              final dayLine =
-                                  DateFormat('dd MMM, EEEE').format(day);
-                              final status = _rowStatus(day, r, leave);
-                              final hours = _hoursLine(r);
-
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 8),
-                                child: Material(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(14),
-                                  clipBehavior: Clip.antiAlias,
-                                  child: InkWell(
-                                    onTap: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute<void>(
-                                          builder: (_) => AttendanceDayDetailScreen(
-                                            day: day,
-                                            record: r,
-                                          ),
+                                    Expanded(
+                                      child: Text(
+                                        monthTitle,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w600,
+                                          color: ink,
                                         ),
-                                      );
-                                    },
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 14,
                                       ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  dayLine,
-                                                  style: const TextStyle(
-                                                    fontSize: 15,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: ink,
+                                    ),
+                                    IconButton(
+                                      onPressed: _canGoNext ? () => _goMonth(1) : null,
+                                      icon: Icon(
+                                        Icons.chevron_right_rounded,
+                                        color: _canGoNext
+                                            ? ink.withValues(alpha: 0.6)
+                                            : ink.withValues(alpha: 0.2),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                                child: _StatsGrid(
+                                  present: stats.present,
+                                  absent: stats.absent,
+                                  weekOff: stats.weekOff,
+                                ),
+                              ),
+                            ),
+                            SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: Colors.black12),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                'Attendance Summary',
+                                                style: TextStyle(
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: ink.withValues(alpha: 0.9),
+                                                ),
+                                              ),
+                                            ),
+                                            if ((_shiftTimingLine ?? '').isNotEmpty)
+                                              Text(
+                                                _shiftTimingLine!,
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: ink.withValues(alpha: 0.5),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      ListView.separated(
+                                        itemCount: _daysDescending.length,
+                                        shrinkWrap: true,
+                                        physics: const NeverScrollableScrollPhysics(),
+                                        separatorBuilder: (_, __) => Divider(
+                                          height: 1,
+                                          thickness: 1,
+                                          color: Colors.grey.shade300,
+                                        ),
+                                        itemBuilder: (context, index) {
+                                          final day = _daysDescending[index];
+                                          final r = _recordFor(day);
+                                          final leave = _approvedLeaveForDay(day);
+                                          final status = _rowStatus(day, r, leave);
+                                          final timing = _timingLine(r);
+                              final rowShiftTiming =
+                                  ((r?.shiftStartTime ?? '').isNotEmpty &&
+                                          (r?.shiftEndTime ?? '').isNotEmpty)
+                                      ? '${r!.shiftStartTime} - ${r.shiftEndTime}'
+                                      : _shiftTimingLine;
+                              final shiftLabel = (r?.shiftName ?? '').trim();
+                              final showShiftLabel = status.toLowerCase() == 'present' &&
+                                  shiftLabel.isNotEmpty;
+                              final headlineStatus = showShiftLabel
+                                  ? '$status | ${shiftLabel.toUpperCase()}'
+                                  : status;
+                                          return InkWell(
+                                            onTap: () {
+                                              Navigator.push(
+                                                context,
+                                                MaterialPageRoute<void>(
+                                                  builder: (_) => AttendanceDayDetailScreen(
+                                                    day: day,
+                                                    record: r,
+                                                    shiftTiming: rowShiftTiming,
                                                   ),
                                                 ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  status,
-                                                  style: TextStyle(
-                                                    fontSize: 13,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: ink.withValues(
-                                                      alpha: 0.52,
+                                              );
+                                            },
+                                            child: Padding(
+                                              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text(
+                                                          DateFormat('dd MMM').format(day),
+                                                          style: const TextStyle(
+                                                            fontSize: 15,
+                                                            fontWeight: FontWeight.w600,
+                                                            color: ink,
+                                                          ),
+                                                        ),
+                                                        const SizedBox(height: 2),
+                                                        Text(
+                                                          DateFormat('EEEE').format(day),
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            color: ink.withValues(alpha: 0.42),
+                                                          ),
+                                                        ),
+                                                      ],
                                                     ),
                                                   ),
-                                                ),
-                                              ],
+                                                  Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                                    children: [
+                                                      Text(
+                                                        headlineStatus,
+                                                        style: const TextStyle(
+                                                          fontSize: 14,
+                                                          fontWeight: FontWeight.w500,
+                                                          color: ink,
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        timing,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          color: ink.withValues(alpha: 0.45),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  Icon(
+                                                    Icons.chevron_right_rounded,
+                                                    color: ink.withValues(alpha: 0.3),
+                                                  ),
+                                                ],
+                                              ),
                                             ),
-                                          ),
-                                          Text(
-                                            hours,
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w700,
-                                              color: ink,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Icon(
-                                            Icons.chevron_right_rounded,
-                                            color: ink.withValues(alpha: 0.35),
-                                          ),
-                                        ],
+                                          );
+                                        },
                                       ),
-                                    ),
+                                    ],
                                   ),
                                 ),
-                              );
-                            },
-                            childCount: _daysDescending.length,
-                          ),
+                              ),
+                            ),
+                            const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: OvalBottomNavBar(
+        currentIndex: 0,
+        onTap: (index) {
+          if (index == 0) return;
+          pushMainShellByIndex(context, index);
+        },
+      ),
     );
   }
 }
@@ -420,12 +638,12 @@ class _StatsGrid extends StatelessWidget {
   const _StatsGrid({
     required this.present,
     required this.absent,
-    required this.half,
+    required this.weekOff,
   });
 
   final int present;
   final int absent;
-  final int half;
+  final int weekOff;
 
   @override
   Widget build(BuildContext context) {
@@ -433,31 +651,23 @@ class _StatsGrid extends StatelessWidget {
     final cells = [
       ('Present', present.toString()),
       ('Absent', absent.toString()),
-      ('Half day', half.toString()),
-      ('Fine', '0:00'),
-      ('Overtime', '0:00'),
+      ('Weekly Off', weekOff.toString()),
     ];
     return GridView.count(
       crossAxisCount: 3,
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
+      mainAxisSpacing: 0,
+      crossAxisSpacing: 0,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 1.45,
+      childAspectRatio: 1.55,
       children: [
         for (final c in cells)
           Container(
             padding: const EdgeInsets.fromLTRB(10, 12, 10, 10),
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: const Color(0xFFF1F1F1),
+              borderRadius: BorderRadius.circular(2),
+              border: Border.all(color: Colors.black12),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

@@ -74,14 +74,16 @@ class ErrorMessageUtils {
       return _genericMessage;
     }
 
-    final msg = error.toString();
-    if (_isTechnical(msg)) return _genericMessage;
-    // Short, clean backend messages (e.g. "Invalid OTP") can pass through
-    if (msg.length < 80 && !msg.contains('Exception') && !msg.contains('Error:')) {
-      final cleaned = msg
-          .replaceFirst(RegExp(r'^Exception:\s*'), '')
-          .replaceFirst(RegExp(r'^Error:\s*'), '');
-      if (cleaned.length < 60) return cleaned;
+    // `throw Exception("…")` becomes `Exception: …` which wrongly matches _isTechnical('exception').
+    var msg = error.toString().trim();
+    msg = msg
+        .replaceFirst(RegExp(r'^Exception:\s*'), '')
+        .replaceFirst(RegExp(r'^StateError:\s*'), '')
+        .replaceFirst(RegExp(r'^FormatException:\s*'), '')
+        .replaceFirst(RegExp(r'^ArgumentError:\s*'), '')
+        .trim();
+    if (msg.isNotEmpty && msg.length <= 400 && !_isTechnical(msg)) {
+      return msg;
     }
     return _genericMessage;
   }

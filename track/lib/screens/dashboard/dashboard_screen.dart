@@ -7,21 +7,28 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/models/attendance_record.dart';
 import 'package:track/models/task.dart';
+import 'package:track/screens/attendance/attendance_summary_screen.dart';
 import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/customers/company_customers_screen.dart';
+import 'package:track/screens/leads/lead_list_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
-import 'package:track/screens/geo/my_tasks_screen.dart';
+import 'package:track/screens/geo/add_task_screen.dart';
 import 'package:track/widgets/task_brand_icon.dart';
 import 'package:track/screens/profile/profile_screen.dart';
 import 'package:track/screens/visits/visits_screen.dart';
 import 'package:track/screens/settings/settings_screen.dart';
+import 'package:track/services/attendance_alarm_log.dart';
+import 'package:track/services/attendance_alarm_punch_state.dart';
+import 'package:track/services/attendance_alarm_scheduler.dart';
 import 'package:track/services/attendance_service.dart';
 import 'package:track/services/auth_service.dart';
 import 'package:track/services/presence_tracking_service.dart';
 import 'package:track/services/task_service.dart';
 import 'package:track/utils/attendance_camera_flow.dart';
+import 'package:track/utils/attendance_punch_log.dart';
 import 'package:track/utils/date_display_util.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
+import 'package:track/widgets/attendance_alarm_sheet.dart';
 import 'package:track/widgets/location_loader.dart';
 
 class _TaskSummary {
@@ -89,7 +96,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with MainShellSwipeNavigation {
   static const Color _bg = Colors.white;
   static const Color _card = Colors.white;
   static const Color _ink = Color(0xFF1A1A1A);
@@ -115,6 +123,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _bootstrap() async {
     try {
+      final isActive = await _enforceActiveEmployeeOrLogout();
+      if (isActive == false) return;
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('user');
       if (raw != null && raw.isNotEmpty) {
@@ -137,6 +147,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final att = AttendanceService();
         await att.syncPendingOps();
         attendance = await att.fetchHistory();
+        await AttendanceAlarmPunchState.syncFromHistory(attendance);
       } catch (_) {}
       if (mounted) {
         setState(() {
@@ -153,10 +164,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
             },
           ),
         );
+        unawaited(AttendanceAlarmScheduler.rescheduleFromServer());
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<bool?> _enforceActiveEmployeeOrLogout() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token == null || token.isEmpty || !mounted) return null;
+
+    final active = await AuthService().checkUserActive();
+    if (active != false || !mounted) return active;
+
+    await AuthService().logout();
+    if (!mounted) return false;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+    return false;
   }
 
   /// Starts 1‑minute presence location pings when an open check-in exists (any screen).
@@ -417,12 +447,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _navigateToIndex(BuildContext context, int index) {
-    if (index == 0) return;
+    if (index == 1) return;
     final Widget target = switch (index) {
-      1 => const MyTasksScreen(),
+      0 => const AttendanceSummaryScreen(),
       2 => const VisitsScreen(),
-      3 => const ProfileScreen(),
-      4 => const SettingsScreen(),
+      3 => const LeadListScreen(),
+      4 => const ProfileScreen(),
+      5 => const SettingsScreen(),
       _ => const DashboardScreen(),
     };
     Navigator.push(
@@ -463,6 +494,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     BuildContext context, {
     required bool checkout,
   }) async {
+    logAttendancePunch(
+      '[AttendancePunchDebug] button_clicked action=${checkout ? 'checkout' : 'checkin'} source=dashboard_today_attendance_card',
+    );
     final ok = await AttendanceCameraFlow.run(context, checkout: checkout);
     if (!mounted || !ok) return;
     setState(() => _loading = true);
@@ -490,12 +524,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _openAddTask(BuildContext context) {
+    if (_userId == null || _userId!.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AddTaskScreen(userId: _userId!)),
+    ).then((_) => _bootstrap());
+  }
+
   void _openAppMenu(BuildContext context) {
     showAppDrawerMenu(
       context,
+      onAddTask: _userId != null && _userId!.isNotEmpty
+          ? () => _openAddTask(context)
+          : null,
       onAddCustomer: () => _openCreateCustomer(context),
-      onProfile: () => _navigateToIndex(context, 3),
-      onSettings: () => _navigateToIndex(context, 4),
+      onProfile: () => _navigateToIndex(context, 4),
+      onSettings: () => _navigateToIndex(context, 5),
       onLogout: () => _logout(context),
     );
   }
@@ -623,78 +668,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _darkStatCard({
-    required String label,
-    required String value,
-    IconData? icon,
-    Widget? leadingIcon,
-    required Color accent,
-    String? hint,
-  }) {
-    assert(icon != null || leadingIcon != null);
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.18),
-                  shape: BoxShape.circle,
-                ),
-                child: leadingIcon ??
-                    Icon(icon!, color: AppColors.primary, size: 20),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.6,
-              color: _ink,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: _ink.withValues(alpha: 0.7),
-            ),
-          ),
-          if (hint != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              hint,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 10,
-                color: _ink.withValues(alpha: 0.45),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _shortcutChip({
     IconData? icon,
     Widget? iconWidget,
@@ -805,18 +778,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _circleIconButton(
           icon: Icons.person_outline_rounded,
           tooltip: 'Profile',
-          onPressed: () => _navigateToIndex(context, 3),
+          onPressed: () => _navigateToIndex(context, 4),
         ),
       ],
     );
-  }
-
-  String _hintForSummary(_TaskSummary s) {
-    if (s.all == 0) return 'Add a task to get started';
-    if (s.completed == s.all) return 'All caught up';
-    if (s.active > 0) return 'Ride in progress';
-    if (s.pending > 0) return 'Queue ready to work';
-    return 'Keep the momentum';
   }
 
   @override
@@ -826,7 +791,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       backgroundColor: _bg,
       body: SafeArea(
-        child: _loading
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) => handleMainShellSwipe(details, 1),
+          child: _loading
             ? const Center(child: LocationLoader(size: 44))
             : RefreshIndicator(
                 color: AppColors.primary,
@@ -864,6 +832,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               onTap: () => _bootstrap(),
                             ),
                             _shortcutChip(
+                              icon: Icons.alarm_rounded,
+                              selected: false,
+                              tooltip: 'Attendance alarms',
+                              onTap: () => showAttendanceAlarmSetupSheet(context),
+                            ),
+                            _shortcutChip(
                               iconWidget: TaskBrandIcon(
                                 size: 22,
                                 color: _ink.withValues(alpha: 0.55),
@@ -888,96 +862,80 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               icon: Icons.person_outline_rounded,
                               selected: false,
                               tooltip: 'Profile',
-                              onTap: () => _navigateToIndex(context, 3),
+                              onTap: () => _navigateToIndex(context, 4),
                             ),
                             _shortcutChip(
                               icon: Icons.settings_outlined,
                               selected: false,
                               tooltip: 'Settings',
-                              onTap: () => _navigateToIndex(context, 4),
+                              onTap: () => _navigateToIndex(context, 5),
                             ),
                           ],
                         ),
                       ),
                       const SizedBox(height: 22),
-                      Text(
-                        'Overview',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: _ink.withValues(alpha: 0.92),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _darkStatCard(
-                              label: 'All tasks',
-                              value: '${summary.all}',
-                              leadingIcon: TaskBrandIcon(
-                                size: 20,
-                                color: AppColors.primary,
+                      InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () => _navigateToIndex(context, 2),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: AppColors.primary.withValues(alpha: 0.35),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary.withValues(alpha: 0.18),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.storefront_rounded,
+                                  color: _ink,
+                                ),
                               ),
-                              accent: AppColors.primary,
-                              hint: 'Total in your list',
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _darkStatCard(
-                              label: 'Pending',
-                              value: '${summary.pending}',
-                              icon: Icons.pending_actions_rounded,
-                              accent: AppColors.primary,
-                              hint: 'Awaiting start',
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _darkStatCard(
-                              label: 'In progress',
-                              value: '${summary.active}',
-                              icon: Icons.directions_car_rounded,
-                              accent: AppColors.primary,
-                              hint: 'Active rides',
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _darkStatCard(
-                              label: 'Completed',
-                              value: '${summary.completed}',
-                              icon: Icons.check_circle_outline_rounded,
-                              accent: AppColors.primary,
-                              hint: _hintForSummary(summary),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 26),
-                      FilledButton.icon(
-                        onPressed: () => _navigateToIndex(context, 1),
-                        icon: const Icon(Icons.play_circle_fill_rounded),
-                        label: const Text('Open task list'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: _ink,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Today Visits',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w800,
+                                        color: _ink,
+                                      ),
+                                    ),
+                                    SizedBox(height: 2),
+                                    Text(
+                                      'Tap to open your visits queue',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.chevron_right_rounded,
+                                color: _ink,
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
                       OutlinedButton.icon(
                         onPressed: () => _openCreateCustomer(context),
                         icon: Icon(
@@ -1003,9 +961,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
               ),
+        ),
       ),
       bottomNavigationBar: OvalBottomNavBar(
-        currentIndex: 0,
+        currentIndex: 1,
         onTap: (index) => _navigateToIndex(context, index),
       ),
     );

@@ -24,7 +24,8 @@ class CompanyCustomersScreen extends StatefulWidget {
   State<CompanyCustomersScreen> createState() => _CompanyCustomersScreenState();
 }
 
-class _CompanyCustomersScreenState extends State<CompanyCustomersScreen> {
+class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
+    with MainShellSwipeNavigation {
   final CustomerService _customerService = CustomerService();
 
   List<Customer> _customers = const [];
@@ -140,7 +141,10 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen> {
       backgroundColor: Colors.white,
       body: SafeArea(
         bottom: false,
-        child: Column(
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) => handleMainShellSwipe(details, 3),
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Container(
@@ -182,7 +186,7 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen> {
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Text(
-                      _companyLine,
+                      'Customers · $_companyLine',
                       style: TextStyle(
                         color: Colors.black.withValues(alpha: 0.72),
                         fontSize: 14,
@@ -311,9 +315,10 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen> {
             ),
           ],
         ),
+        ),
       ),
       bottomNavigationBar: OvalBottomNavBar(
-        currentIndex: 0,
+        currentIndex: 3,
         onTap: (i) => pushMainShellByIndex(context, i),
       ),
     );

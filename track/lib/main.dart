@@ -1,4 +1,6 @@
 import 'dart:async';
+
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +11,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:background_location_tracker/background_location_tracker.dart';
 import 'services/alarm_service.dart';
+import 'services/attendance_alarm_log.dart';
 import 'services/auth_service.dart';
 import 'services/fcm_service.dart';
 import 'config/app_route_observer.dart';
@@ -60,6 +63,15 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        try {
+          final ok = await AndroidAlarmManager.initialize();
+          attendanceAlarmLog('main AndroidAlarmManager.initialize => $ok');
+        } catch (e, st) {
+          attendanceAlarmLog('main AndroidAlarmManager.initialize FAILED: $e $st');
+        }
+      }
 
       try {
         await Firebase.initializeApp();

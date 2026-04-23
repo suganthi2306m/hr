@@ -54,6 +54,32 @@ const populateRoleIfPresent = async (user) => {
     }
 };
 
+const toFinite = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+};
+
+function resolveOfficeLocationFromCompanyBranch(user, companyDoc) {
+    if (!companyDoc || !Array.isArray(companyDoc.branches)) return null;
+    const branchId = user?.branchId ? String(user.branchId) : '';
+    if (!branchId) return null;
+    const branch = companyDoc.branches.find((b) => String(b?._id || '') === branchId);
+    if (!branch) return null;
+
+    const geofence = branch.geofence && typeof branch.geofence === 'object' ? branch.geofence : null;
+    const lat = toFinite(geofence?.lat);
+    const lng = toFinite(geofence?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const radius = toFinite(geofence?.radiusM) ?? 100;
+    const address = String(geofence?.address || branch.address || '').trim();
+    return {
+        latitude: lat,
+        longitude: lng,
+        radius,
+        address,
+    };
+}
+
 // Helper to find user by email in current User model only
 const findOrCreateUserByEmail = async (rawEmail) => {
     if (!rawEmail) return null;
@@ -189,6 +215,15 @@ const login = async (req, res) => {
 
         // Prepare Response
         let company = user.companyId;
+        let companyDoc = null;
+        try {
+            if (company) {
+                companyDoc = await Company.findById(company).select('name branches employeeCustomFieldDefs').lean();
+            }
+        } catch (e) {
+            console.warn('[Auth] Company lookup failed:', e?.message);
+        }
+        const officeLocation = resolveOfficeLocationFromCompanyBranch(user, companyDoc) || user.officeLocation || null;
         const formattedPermissions = user.roleId?.permissions || [];
         const businessId = company?._id || company;
 
@@ -209,6 +244,10 @@ const login = async (req, res) => {
             console.warn('[Auth] TaskSettings fetch failed:', e?.message);
         }
 
+        const defsRawLogin = companyDoc?.employeeCustomFieldDefs;
+        const employeeCustomFieldDefsLogin = Array.isArray(defsRawLogin)
+            ? defsRawLogin.filter((d) => d && d.isActive !== false)
+            : [];
         const userResponse = {
             id: user._id,
             email: user.email,
@@ -216,14 +255,23 @@ const login = async (req, res) => {
             role: user.role,
             phone: user.phone,
             companyId: company?._id || company,
-            companyName: company && company.name ? company.name : undefined,
+            companyName: companyDoc?.name || (company && company.name ? company.name : undefined),
             businessId: businessId || company?._id || company,
             permissions: formattedPermissions,
             staffId: null,
             avatar: user.avatar,
+            officeLocation,
             locationAccess: false,
             taskSettings: taskSettings?.settings || null,
             branchName: undefined,
+            employeeCode: user.employeeCode,
+            designation: user.designation,
+            department: user.department,
+            employeeProfile:
+                user.employeeProfile && typeof user.employeeProfile === 'object' && !Array.isArray(user.employeeProfile)
+                    ? user.employeeProfile
+                    : {},
+            employeeCustomFieldDefs: employeeCustomFieldDefsLogin,
         };
 
         // Create a refresh token (if needed by frontend, though Flutter usually uses access token for now)
@@ -280,6 +328,15 @@ const googleLogin = async (req, res) => {
         const accessToken = generateToken(user._id);
 
         let company = user.companyId;
+        let companyDoc = null;
+        try {
+            if (company) {
+                companyDoc = await Company.findById(company).select('name branches employeeCustomFieldDefs').lean();
+            }
+        } catch (e) {
+            console.warn('[Auth] Company lookup failed (google):', e?.message);
+        }
+        const officeLocation = resolveOfficeLocationFromCompanyBranch(user, companyDoc) || user.officeLocation || null;
         const formattedPermissions = user.roleId?.permissions || [];
         const businessId = company?._id || company;
 
@@ -298,6 +355,10 @@ const googleLogin = async (req, res) => {
             console.warn('[Auth] TaskSettings fetch failed (google):', e?.message);
         }
 
+        const defsRawGoogle = companyDoc?.employeeCustomFieldDefs;
+        const employeeCustomFieldDefsGoogle = Array.isArray(defsRawGoogle)
+            ? defsRawGoogle.filter((d) => d && d.isActive !== false)
+            : [];
         const userResponse = {
             id: user._id,
             email: user.email,
@@ -305,14 +366,23 @@ const googleLogin = async (req, res) => {
             role: user.role,
             phone: user.phone,
             companyId: company?._id || company,
-            companyName: company && company.name ? company.name : undefined,
+            companyName: companyDoc?.name || (company && company.name ? company.name : undefined),
             businessId: businessId || company?._id || company,
             permissions: formattedPermissions,
             staffId: null,
             avatar: user.avatar,
+            officeLocation,
             locationAccess: false,
             taskSettings: taskSettings?.settings || null,
             branchName: undefined,
+            employeeCode: user.employeeCode,
+            designation: user.designation,
+            department: user.department,
+            employeeProfile:
+                user.employeeProfile && typeof user.employeeProfile === 'object' && !Array.isArray(user.employeeProfile)
+                    ? user.employeeProfile
+                    : {},
+            employeeCustomFieldDefs: employeeCustomFieldDefsGoogle,
         };
 
         res.json({
@@ -365,6 +435,24 @@ const getProfile = async (req, res) => {
         let fullUser = await User.findById(user._id);
         fullUser = await populateRoleIfPresent(fullUser);
 
+        let companyDoc = null;
+        try {
+            const cid = fullUser.companyId;
+            if (cid) {
+                companyDoc = await Company.findById(cid).select('name branches employeeCustomFieldDefs').lean();
+            }
+        } catch (e) {
+            console.warn('[Auth] getProfile company lookup failed:', e?.message);
+        }
+        const defsRaw = companyDoc?.employeeCustomFieldDefs;
+        const employeeCustomFieldDefs = Array.isArray(defsRaw)
+            ? defsRaw.filter((d) => d && d.isActive !== false)
+            : [];
+        const employeeProfile =
+            fullUser.employeeProfile && typeof fullUser.employeeProfile === 'object' && !Array.isArray(fullUser.employeeProfile)
+                ? fullUser.employeeProfile
+                : {};
+
         res.status(200).json({
             success: true,
             data: {
@@ -373,7 +461,14 @@ const getProfile = async (req, res) => {
                     email: fullUser.email,
                     phone: fullUser.phone,
                     avatar: fullUser.avatar,
-                    role: fullUser.role
+                    role: fullUser.role,
+                    companyId: fullUser.companyId,
+                    companyName: companyDoc?.name,
+                    employeeCode: fullUser.employeeCode,
+                    designation: fullUser.designation,
+                    department: fullUser.department,
+                    employeeProfile,
+                    employeeCustomFieldDefs,
                 },
                 branchName: null,
                 staffData: null

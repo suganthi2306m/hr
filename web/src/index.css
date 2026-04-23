@@ -65,6 +65,31 @@ body {
   }
 }
 
+@keyframes snackbarAutoHide {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+    max-height: 96px;
+    margin-bottom: 0.75rem;
+  }
+  12%,
+  78% {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 96px;
+    margin-bottom: 0.75rem;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+    max-height: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+  }
+}
+
 .animate-fade-in {
   animation: fadeIn 0.6s ease-out;
 }
@@ -127,6 +152,8 @@ body {
 
   .alert-success {
     @apply rounded-xl border border-emerald-200/80 bg-emerald-50 px-4 py-3 text-sm text-emerald-900;
+    animation: snackbarAutoHide 3s ease-in-out forwards;
+    overflow: hidden;
   }
 
   .alert-error {
@@ -155,8 +182,13 @@ body {
 }
 
 @layer base {
+  /* Slightly smaller than the typical 16px default; scales all Tailwind rem font sizes together. */
+  html {
+    font-size: 92%;
+  }
+
   table {
-    font-size: 13px;
+    font-size: 0.8125rem;
   }
 
   table thead th {

@@ -28,7 +28,7 @@ export default function UsersImportPage() {
         window.alert(`${parseErrors.length} row(s) skipped.\n\n${msg}${parseErrors.length > 12 ? '\n…' : ''}`);
       }
       if (!parsed.length) {
-        window.alert('No valid user rows to import.');
+        window.alert('No valid employee rows to import.');
         return;
       }
 
@@ -39,14 +39,14 @@ export default function UsersImportPage() {
           await apiClient.post('/users', parsed[i]);
           created += 1;
         } catch (e) {
-          errors.push(`Row ${i + 2}: ${e.response?.data?.message || e.message || 'Failed to import user.'}`);
+          errors.push(`Row ${i + 2}: ${e.response?.data?.message || e.message || 'Failed to import employee.'}`);
         }
       }
       if (errors.length) {
         const preview = errors.slice(0, 12).join('\n');
-        window.alert(`Imported ${created}/${parsed.length} users.\n\n${preview}${errors.length > 12 ? '\n…' : ''}`);
+        window.alert(`Imported ${created}/${parsed.length} employees.\n\n${preview}${errors.length > 12 ? '\n…' : ''}`);
       } else {
-        window.alert(`Imported ${created} user(s).`);
+        window.alert(`Imported ${created} employee(s).`);
       }
       if (input) input.value = '';
       navigate('/dashboard/users');
@@ -66,7 +66,7 @@ export default function UsersImportPage() {
           onClick={() => navigate('/dashboard/users')}
           className="btn-secondary shrink-0 px-3 py-2 text-sm font-semibold"
         >
-          ← Back to users
+          ← Back to employees
         </button>
         <h1 className="min-w-0 truncate text-lg font-bold tracking-tight text-dark sm:text-xl">Import from Excel</h1>
       </div>,
@@ -78,7 +78,7 @@ export default function UsersImportPage() {
     <section className="space-y-4">
       <div className="flux-card p-4 shadow-panel-lg sm:p-6">
         <p className="text-sm text-slate-600">
-          Download the sample file, replace rows with your users, then upload.
+          Download the sample file, replace rows with your employees, then upload.
         </p>
         <ul className="mt-3 list-inside list-disc text-xs text-slate-500">
           <li>

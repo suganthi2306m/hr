@@ -7,9 +7,25 @@ const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const connectDb = require('./config/db');
 const registerRoutes = require('./routes');
+const subscriptionWebhookRoutes = require('./routes/subscriptionWebhookRoutes');
 const initSocketServer = require('./sockets');
-const { ensureDefaultAdmin, ensureDefaultUsers, ensureCustomerIndexes } = require('./services/bootstrapService');
+const {
+  ensureDefaultAdmin,
+  ensureMainSuperAdmin,
+  ensureSuperAdmin,
+  migrateSubscriptionPlans,
+  ensureDefaultSubscriptionPlans,
+  ensureDefaultUsers,
+  ensureCustomerIndexes,
+} = require('./services/bootstrapService');
 const { startLocationRealtime } = require('./services/locationRealtimeService');
+const {
+  parseCorsOrigins,
+  isDevLocalFrontendOrigin,
+} = require('./utils/corsAllowlist');
+
+/** Log each auto-allowed dev Origin once (avoids spam on every preflight). */
+const devCorsOriginLogged = new Set();
 
 dotenv.config();
 
@@ -24,19 +40,11 @@ const limiter = rateLimit({
   max: 5000,
   standardHeaders: true,
   legacyHeaders: false,
+  /** Plain-string bodies omit `message`; keep JSON aligned with other API errors. */
+  message: { message: 'Too many requests. Please try again later.' },
 });
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-
-/** Trim each origin — spaces after commas in CORS_ORIGIN break matching and cause POST CORS failures. */
-function parseCorsOrigins() {
-  const raw = process.env.CORS_ORIGIN || '';
-  const list = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return list.length ? list : ['http://localhost:5173'];
-}
 
 /** Vercel project URLs (production + previews) without listing each in CORS_ORIGIN. */
 function isCustomerconnectVercelOrigin(origin) {
@@ -54,6 +62,9 @@ const parsedCorsOrigins = parseCorsOrigins();
 // eslint-disable-next-line no-console
 console.log('[cors] allow-list from CORS_ORIGIN:', parsedCorsOrigins.join(' | ') || '(none)');
 
+/** Payment provider webhooks need raw body for signature verification (Razorpay). */
+app.use('/api/subscription/webhook', express.raw({ type: 'application/json' }), subscriptionWebhookRoutes);
+
 app.use(
   cors({
     origin(origin, callback) {
@@ -62,6 +73,14 @@ app.use(
       if (isCustomerconnectVercelOrigin(origin)) {
         // eslint-disable-next-line no-console
         console.log('[cors] allowing Vercel host:', origin);
+        return callback(null, origin);
+      }
+      if (isDevLocalFrontendOrigin(origin)) {
+        if (!devCorsOriginLogged.has(origin)) {
+          devCorsOriginLogged.add(origin);
+          // eslint-disable-next-line no-console
+          console.log('[cors] allowing dev localhost frontend (NODE_ENV!=production):', origin);
+        }
         return callback(null, origin);
       }
       // eslint-disable-next-line no-console
@@ -83,19 +102,54 @@ app.get('/health', (_req, res) => {
 
 registerRoutes(app);
 
-app.use((error, _req, res, _next) => {
+app.use((error, req, res, _next) => {
   const status = error.status || 500;
+  const verboseErrors =
+    process.env.NODE_ENV !== 'production' || String(process.env.VERBOSE_API_ERRORS || '').trim() === '1';
+  if (verboseErrors && (error.raw || status >= 500)) {
+    const path = req.originalUrl || req.url || '';
+    // eslint-disable-next-line no-console
+    console.error(`[http error] ${req.method} ${path} → ${status}: ${error.message}`);
+    if (error.raw && typeof error.raw === 'object') {
+      // eslint-disable-next-line no-console
+      console.error('[http error] upstream JSON:', JSON.stringify(error.raw).slice(0, 2000));
+    }
+    if (error.stack) {
+      // eslint-disable-next-line no-console
+      console.error(error.stack);
+    }
+  }
   res.status(status).json({
     message: error.message || 'Internal server error',
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = Number(process.env.PORT) || 5000;
+
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[server] Port ${PORT} is already in use (EADDRINUSE). Another LiveTrack / Node process is probably still running.\n` +
+        `  Fix: stop the other terminal (Ctrl+C), or run: Get-NetTCPConnection -LocalPort ${PORT} | Select OwningProcess\n` +
+        `  Or use a different port: set PORT=5001 in web_backend/.env`,
+    );
+    process.exit(1);
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.error('[server] HTTP server error:', err);
+  process.exit(1);
+});
 
 async function start() {
   await connectDb();
   await ensureCustomerIndexes();
   await ensureDefaultAdmin();
+  await ensureMainSuperAdmin();
+  await ensureSuperAdmin();
+  await migrateSubscriptionPlans();
+  await ensureDefaultSubscriptionPlans();
   await ensureDefaultUsers();
   startLocationRealtime(io);
   server.listen(PORT, () => {

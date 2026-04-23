@@ -23,7 +23,8 @@ const forgotLimiter = rateLimit({
 router.post('/login', login);
 router.post('/forgot-password/request-otp', forgotLimiter, requestPasswordOtp);
 router.post('/forgot-password/reset', forgotLimiter, resetPasswordWithOtp);
-router.get('/me', auth, authorizeRole('admin'), me);
-router.put('/change-password', auth, authorizeRole('admin'), changePassword);
+/** Tenant admins and all super-admin variants need profile + password routes. */
+router.get('/me', auth, authorizeRole('admin', 'superadmin', 'mainsuperadmin'), me);
+router.put('/change-password', auth, authorizeRole('admin', 'superadmin', 'mainsuperadmin'), changePassword);
 
 module.exports = router;

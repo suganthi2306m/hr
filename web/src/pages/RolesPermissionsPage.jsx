@@ -16,7 +16,7 @@ function RolesPermissionsPage() {
         <ul className="mt-3 list-inside list-disc space-y-2 text-sm text-slate-600">
           <li>
             <Link to="/dashboard/users" className="font-semibold text-primary hover:underline">
-              Users
+              Employees
             </Link>{' '}
             — create and edit accounts; set role to admin, manager, or field agent.
           </li>

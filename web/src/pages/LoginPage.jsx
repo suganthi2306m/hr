@@ -59,7 +59,9 @@ function LoginPage() {
 
     try {
       const response = await login(email, password);
-      if (response.admin?.companySetupCompleted) {
+      if (['superadmin', 'mainsuperadmin'].includes(response.admin?.role)) {
+        navigate('/super');
+      } else if (response.admin?.companySetupCompleted) {
         navigate('/dashboard');
       } else {
         navigate('/company-setup');

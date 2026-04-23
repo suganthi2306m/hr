@@ -5,8 +5,11 @@ import 'package:dio/dio.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/attendance_alarm_settings.dart';
 import '../models/attendance_record.dart';
+import '../utils/attendance_punch_log.dart';
 import 'api_client.dart';
+import 'attendance_alarm_punch_state.dart';
 
 class AttendanceService {
   AttendanceService._();
@@ -183,6 +186,66 @@ class AttendanceService {
         .toList();
   }
 
+  /// Returns current user's shift information and week-off weekdays.
+  /// Backend shape:
+  /// { success, data: { shiftId, shiftName, startTime, endTime, weekOffWeekdays: [1..7] } }
+  Future<AttendanceAlarmSettings> fetchAttendanceAlarms() async {
+    await _setAuthToken();
+    final res = await _api.request<Map<String, dynamic>>(
+      '/attendance/alarms',
+      method: 'GET',
+    );
+    final data = res.data?['data'];
+    if (data is Map<String, dynamic>) {
+      return AttendanceAlarmSettings.fromJson(data);
+    }
+    if (data is Map) {
+      return AttendanceAlarmSettings.fromJson(
+        Map<String, dynamic>.from(data),
+      );
+    }
+    return AttendanceAlarmSettings.fromJson(null);
+  }
+
+  Future<AttendanceAlarmSettings> saveAttendanceAlarms(
+    AttendanceAlarmSettings settings,
+  ) async {
+    await _setAuthToken();
+    final res = await _api.request<Map<String, dynamic>>(
+      '/attendance/alarms',
+      method: 'PUT',
+      data: settings.toJson(),
+    );
+    final data = res.data?['data'];
+    if (data is Map<String, dynamic>) {
+      return AttendanceAlarmSettings.fromJson(data);
+    }
+    if (data is Map) {
+      return AttendanceAlarmSettings.fromJson(
+        Map<String, dynamic>.from(data),
+      );
+    }
+    return settings;
+  }
+
+  Future<Map<String, dynamic>?> fetchShiftMeta({DateTime? month}) async {
+    await _setAuthToken();
+    final res = await _api.request<Map<String, dynamic>>(
+      '/attendance/shift-meta',
+      method: 'GET',
+      queryParameters: month == null
+          ? null
+          : <String, dynamic>{
+              'month':
+                  '${month.year}-${month.month.toString().padLeft(2, '0')}',
+            },
+    );
+    final data = res.data?['data'];
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return null;
+  }
+
   Future<Map<String, dynamic>> checkIn({
     required String selfiePath,
     required Position position,
@@ -211,6 +274,49 @@ class AttendanceService {
     );
   }
 
+  Future<Map<String, dynamic>?> logPunchButtonClick({
+    required String action,
+    String source = 'app_dashboard',
+    String stage = 'button_click',
+    String detail = '',
+  }) async {
+    try {
+      await _setAuthToken();
+      final res = await _api.request<Map<String, dynamic>>(
+        '/attendance/punch-click-log',
+        method: 'POST',
+        data: <String, dynamic>{
+          'action': action,
+          'source': source,
+          'stage': stage,
+          'detail': detail,
+        },
+      );
+      final data = res.data;
+      final ctxRaw = data?['data'];
+      if (ctxRaw is Map) {
+        final ctx = Map<String, dynamic>.from(ctxRaw);
+        logAttendancePunch(
+          '[AttendancePunchDebug][server-click] '
+          'action=$action stage=$stage '
+          'attendanceGeofenceEnabled=${ctx['attendanceGeofenceEnabled']} '
+          'branchName="${ctx['branchName'] ?? '-'}" '
+          'branchRadiusM=${ctx['branchRadiusM'] ?? '-'} '
+          'shiftId="${ctx['shiftId'] ?? '-'}" '
+          'shiftName="${ctx['shiftName'] ?? '-'}" '
+          'shiftStart="${ctx['shiftStart'] ?? '-'}" '
+          'shiftEnd="${ctx['shiftEnd'] ?? '-'}" '
+          'geofenceSource="${ctx['geofenceSource'] ?? '-'}"',
+        );
+        return ctx;
+      }
+      return null;
+    } catch (_) {
+      // Intentionally non-blocking diagnostics.
+      return null;
+    }
+  }
+
   /// After a successful online check-in, drop any queued check-outs — they would hit the
   /// new open session and look like an "automatic checkout". After check-out, drop queued
   /// check-ins to avoid duplicate-day punches when replaying.
@@ -235,6 +341,12 @@ class AttendanceService {
     String? address,
   }) async {
     await _setAuthToken();
+    logAttendancePunch(
+      '[AttendancePunchDebug] submit type=$queueType '
+      'lat=${position.latitude} lng=${position.longitude} '
+      'accuracy=${position.accuracy} mocked=${position.isMocked} '
+      'hasAddress=${(address ?? '').trim().isNotEmpty}',
+    );
     final file = File(selfiePath);
     if (!file.existsSync()) {
       throw Exception('Selfie file not found');
@@ -248,6 +360,7 @@ class AttendanceService {
       'accuracy': position.accuracy.toString(),
       'isMocked': position.isMocked.toString(),
       'address': address ?? '',
+      'source': 'app',
       'selfie': await MultipartFile.fromFile(
         selfiePath,
         filename: selfiePath.split(Platform.pathSeparator).last,
@@ -256,8 +369,33 @@ class AttendanceService {
 
     try {
       final res = await _postAttendanceMultipart(path, form);
+      final data = res.data ?? <String, dynamic>{};
+      final info = data['info'];
+      Map<String, dynamic>? debugContext;
+      if (info is Map && info['debugContext'] is Map) {
+        debugContext = Map<String, dynamic>.from(info['debugContext'] as Map);
+      } else if (data['debugContext'] is Map) {
+        debugContext = Map<String, dynamic>.from(data['debugContext'] as Map);
+      }
+      if (debugContext != null) {
+        logAttendancePunch(
+          '[AttendancePunchDebug][server] '
+          'action=${debugContext['action'] ?? queueType} '
+          'attendanceGeofenceEnabled=${debugContext['attendanceGeofenceEnabled']} '
+          'branchName="${debugContext['branchName'] ?? '-'}" '
+          'branchRadiusM=${debugContext['branchRadiusM'] ?? '-'} '
+          'shiftId="${debugContext['shiftId'] ?? '-'}" '
+          'shiftName="${debugContext['shiftName'] ?? '-'}" '
+          'shiftStart="${debugContext['shiftStart'] ?? '-'}" '
+          'shiftEnd="${debugContext['shiftEnd'] ?? '-'}" '
+          'geofenceSource="${debugContext['geofenceSource'] ?? '-'}" '
+          'distanceM=${debugContext['geofenceDistanceM'] ?? '-'} '
+          'serverTime="${debugContext['serverTime'] ?? '-'}"',
+        );
+      }
       await _purgeConflictingPendingAfterSuccess(queueType);
-      return res.data ?? <String, dynamic>{};
+      await AttendanceAlarmPunchState.applyAfterOnlinePunch(queueType);
+      return data;
     } on DioException catch (e) {
       if (_shouldQueueAttendanceOp(e)) {
         await _enqueuePendingOp({
@@ -271,7 +409,8 @@ class AttendanceService {
           'createdAt': DateTime.now().toIso8601String(),
         });
       }
-      throw Exception(_dioErrorMessage(e));
+      // Rethrow as DioException so [ErrorMessageUtils] can read response.data.message (geofence, etc.).
+      rethrow;
     }
   }
 
@@ -332,6 +471,7 @@ class AttendanceService {
           'accuracy': '${op['accuracy'] ?? ''}',
           'isMocked': '${op['isMocked'] ?? false}',
           'address': op['address']?.toString() ?? '',
+          'source': 'app',
           'selfie': await MultipartFile.fromFile(
             selfiePath,
             filename: selfiePath.split(Platform.pathSeparator).last,
@@ -339,6 +479,7 @@ class AttendanceService {
         });
         await _postAttendanceMultipart(endpoint, form);
         await _purgeConflictingPendingAfterSuccess(type);
+        await AttendanceAlarmPunchState.applyAfterOnlinePunch(type);
         if (type == 'checkin') {
           work.removeWhere((o) => o['type']?.toString() == 'checkout');
         } else if (type == 'checkout') {
