@@ -1,9 +1,11 @@
 // hrms/lib/config/constants.dart
 class AppConstants {
+
   /// Default app (mobile) API — Render `backend` service.
   /// Override: `flutter run --dart-define=APP_API_BASE_URL=...`
-  static const String _defaultApiBaseUrl =
-      'https://hr-app-tmi3.onrender.com/api';
+  static const String _defaultApiBaseUrl ='https://hr-app-tmi3.onrender.com/api';
+  //'http://192.168.1.33:9001/api';
+     // 'https://hr-app-tmi3.onrender.com/api';
 
   /// Default web HRMS API — Render `web_backend` service (interaction, admin parity with web).
   /// Override: `flutter run --dart-define=APP_WEB_API_BASE_URL=...`
@@ -108,4 +110,7 @@ class AppConstants {
     final p = path.startsWith('/') ? path : '/$path';
     return '$fileBaseUrl$p';
   }
+
+  /// Product banner / gallery URLs from admin (absolute or relative to [fileBaseUrl]).
+  static String productImageUrl(String? path) => getLmsFileUrl(path);
 }

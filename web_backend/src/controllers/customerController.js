@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Customer = require('../models/Customer');
 const Company = require('../models/Company');
 const Task = require('../models/Task');
@@ -422,11 +423,128 @@ async function listCustomerFollowUps(req, res, next) {
   }
 }
 
+function parseFollowupRangeDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function followupStartOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function followupEndOfDay(d) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+/** All company customer follow-ups (for Track → Customers → Follow-up). */
+async function listAllCustomerFollowUps(req, res, next) {
+  try {
+    await ensureCustomerStatusEnumInDb();
+    const company = await getCompanyIdForAdmin(req.admin._id);
+    if (!company?._id) return res.json({ items: [] });
+
+    const search = String(req.query.search || '').trim();
+    const customerQuery = { companyId: company._id };
+    if (search) {
+      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      customerQuery.$or = [
+        { customerName: rx },
+        { companyName: rx },
+        { emailId: rx },
+        { customerNumber: rx },
+      ];
+    }
+    const customers = await Customer.find(customerQuery).select('_id customerName companyName').lean();
+    const custById = new Map(customers.map((c) => [String(c._id), c]));
+    const customerIds = customers.map((c) => c._id);
+    if (!customerIds.length) return res.json({ items: [] });
+
+    const from = parseFollowupRangeDate(req.query.from);
+    const to = parseFollowupRangeDate(req.query.to);
+    const q = { companyId: company._id, customerId: { $in: customerIds } };
+    if (from || to) {
+      q.nextFollowUpAt = {};
+      if (from) q.nextFollowUpAt.$gte = followupStartOfDay(from);
+      if (to) q.nextFollowUpAt.$lte = followupEndOfDay(to);
+    }
+
+    const rows = await CustomerFollowUp.find(q)
+      .sort(from || to ? { nextFollowUpAt: 1, createdAt: -1 } : { createdAt: -1 })
+      .populate('createdByAdminId', 'name email')
+      .populate('createdByUserId', 'name email')
+      .lean();
+
+    const items = rows
+      .map((f) => {
+        const cust = custById.get(String(f.customerId));
+        if (!cust) return null;
+        return {
+          followUpId: f._id,
+          customerId: cust._id,
+          customerName: cust.customerName,
+          companyName: cust.companyName || '',
+          followUpType: f.actionType || 'call',
+          nextFollowUpDate: f.nextFollowUpAt || null,
+          notes: f.note || '',
+          notesPreview: String(f.note || '').slice(0, 120),
+          createdBy: f.createdByUserId || f.createdByAdminId || null,
+          createdAt: f.createdAt || null,
+          updatedAt: f.updatedAt || null,
+          history: Array.isArray(f.history) ? f.history : [],
+        };
+      })
+      .filter(Boolean);
+    return res.json({ items });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function addCustomerFollowUp(req, res, next) {
   try {
+    await ensureCustomerStatusEnumInDb();
     const company = await getCompanyIdForAdmin(req.admin._id);
     if (!company?._id) return res.status(400).json({ message: 'Complete company setup to manage customers.' });
     const cust = await Customer.findOne({ _id: req.params.id, companyId: company._id }).select('_id').lean();
+    if (!cust) return res.status(404).json({ message: 'Customer not found.' });
+    const note = String(req.body.note || '').trim();
+    if (!note) return res.status(400).json({ message: 'Follow-up note is required.' });
+    const actionType = ['call', 'visit', 'message', 'other'].includes(String(req.body.actionType || '').toLowerCase())
+      ? String(req.body.actionType).toLowerCase()
+      : 'call';
+    const nextFollowUpAt = req.body.nextFollowUpAt ? new Date(req.body.nextFollowUpAt) : null;
+    const row = await CustomerFollowUp.create({
+      companyId: company._id,
+      customerId: cust._id,
+      note,
+      actionType,
+      nextFollowUpAt: nextFollowUpAt && !Number.isNaN(nextFollowUpAt.getTime()) ? nextFollowUpAt : null,
+      createdByAdminId: req.admin._id,
+      createdByUserId: null,
+      history: [{ note, actionType, nextFollowUpAt, changedByAdminId: req.admin._id, changedAt: new Date() }],
+    });
+    return res.status(201).json({ item: row });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/** POST /customers/followups — body includes customerId (same payload as POST /customers/:id/followups). */
+async function addCustomerFollowUpFromBody(req, res, next) {
+  try {
+    await ensureCustomerStatusEnumInDb();
+    const company = await getCompanyIdForAdmin(req.admin._id);
+    if (!company?._id) return res.status(400).json({ message: 'Complete company setup to manage customers.' });
+    const customerIdRaw = req.body.customerId;
+    if (!customerIdRaw || !mongoose.Types.ObjectId.isValid(String(customerIdRaw))) {
+      return res.status(400).json({ message: 'A valid customer id is required.' });
+    }
+    const cust = await Customer.findOne({ _id: customerIdRaw, companyId: company._id }).select('_id').lean();
     if (!cust) return res.status(404).json({ message: 'Customer not found.' });
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ message: 'Follow-up note is required.' });
@@ -459,5 +577,7 @@ module.exports = {
   deleteCustomer,
   nearbyCustomers,
   listCustomerFollowUps,
+  listAllCustomerFollowUps,
   addCustomerFollowUp,
+  addCustomerFollowUpFromBody,
 };

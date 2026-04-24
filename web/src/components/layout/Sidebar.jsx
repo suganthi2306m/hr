@@ -9,8 +9,14 @@ const mainLinks = [
   { to: '/dashboard/users', label: 'Employee', icon: 'users' },
 ];
 
+const CUSTOMER_BASE = '/dashboard/track/customers';
+const customerSubLinks = [
+  { to: `${CUSTOMER_BASE}`, label: 'Directory', end: true },
+  { to: `${CUSTOMER_BASE}/follow-up`, label: 'Follow-up' },
+];
+
 const trackLinks = [
-  { to: '/dashboard/track/customers', label: 'Customers', icon: 'customers' },
+  { to: CUSTOMER_BASE, label: 'Customers', icon: 'customers' },
   { to: '/dashboard/track/visits', label: 'Visits', icon: 'visits' },
   { to: '/dashboard/track/leads', label: 'Leads', icon: 'tasks' },
   { to: '/dashboard/track/livetrack', label: 'LiveTrack', icon: 'location', brand: true },
@@ -38,6 +44,8 @@ const configurationLinks = [
   { to: '/dashboard/settings/organization-info', label: 'Organization info', icon: 'org' },
   { to: '/dashboard/settings/organization', label: 'Organization setup', icon: 'org' },
 ];
+
+const ourProductsLink = { to: '/dashboard/our-products', label: 'Our Products', icon: 'products' };
 
 const settingsLink = { to: '/dashboard/settings', label: 'Settings', icon: 'settings' };
 
@@ -138,6 +146,15 @@ function NavIcon({ name }) {
           <path d="M12 15v2" strokeLinecap="round" />
         </svg>
       );
+    case 'products':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <path d="M16.5 9.4 7.55 4.24" />
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+          <path d="M3.27 6.96 12 12.01l8.73-5.05" />
+          <path d="M12 22.08V12" />
+        </svg>
+      );
     case 'billing':
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
@@ -181,12 +198,22 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
   const visitsPrefix = '/dashboard/track/visits';
   const [attendanceOpen, setAttendanceOpen] = useState(() => location.pathname.startsWith(ATT_BASE));
   const [leadsOpen, setLeadsOpen] = useState(() => location.pathname.startsWith(LEAD_BASE));
+  const [customersOpen, setCustomersOpen] = useState(() => location.pathname.startsWith(CUSTOMER_BASE));
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- open accordion when route is nested */
     if (location.pathname.startsWith(ATT_BASE)) setAttendanceOpen(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [location.pathname]);
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (location.pathname.startsWith(LEAD_BASE)) setLeadsOpen(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [location.pathname]);
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (location.pathname.startsWith(CUSTOMER_BASE)) setCustomersOpen(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [location.pathname]);
 
   /** Desktop collapsed hides labels; mobile drawer must always show labels (no hover tooltips on touch). */
@@ -269,8 +296,49 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
             {iconOnlyNav ? '·' : 'Track'}
           </p>
           <div className="space-y-2">
-            {trackLinks.map((item) => (
-              item.to === LEAD_BASE && !iconOnlyNav ? (
+            {trackLinks.map((item) =>
+              item.to === CUSTOMER_BASE && !iconOnlyNav ? (
+                <div key={item.to} className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setCustomersOpen((o) => !o)}
+                    className={clsx(
+                      'group relative flex w-full items-center justify-between rounded-full px-3 py-2.5 text-left text-sm font-semibold transition-colors',
+                      location.pathname.startsWith(CUSTOMER_BASE)
+                        ? 'bg-white/10 text-white'
+                        : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                    )}
+                    aria-expanded={customersOpen}
+                  >
+                    <span className="flex items-center gap-2">
+                      <NavIcon name={item.icon} />
+                      <span>{item.label}</span>
+                    </span>
+                    <ChevronIcon collapsed={!customersOpen} />
+                  </button>
+                  {customersOpen && (
+                    <div className="ml-2 space-y-0.5 border-l border-white/15 py-0.5 pl-3">
+                      {customerSubLinks.map((sub) => (
+                        <NavLink
+                          key={sub.to}
+                          to={sub.to}
+                          end={Boolean(sub.end)}
+                          onClick={onCloseMobile}
+                          title={sub.label}
+                          className={({ isActive }) =>
+                            clsx(
+                              'block rounded-lg px-3 py-2 text-sm font-semibold transition-colors',
+                              isActive ? 'bg-white text-dark shadow-sm' : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                            )
+                          }
+                        >
+                          {sub.label}
+                        </NavLink>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : item.to === LEAD_BASE && !iconOnlyNav ? (
                 <div key={item.to} className="space-y-1">
                   <button
                     type="button"
@@ -321,7 +389,11 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
                   navItemClass({
                     isActive:
                       isActive ||
-                      (item.to === visitsPrefix && location.pathname.startsWith(`${visitsPrefix}/`)),
+                      (item.to === visitsPrefix && location.pathname.startsWith(`${visitsPrefix}/`)) ||
+                      (item.to === CUSTOMER_BASE &&
+                        iconOnlyNav &&
+                        location.pathname.startsWith(CUSTOMER_BASE)) ||
+                      (item.to === LEAD_BASE && iconOnlyNav && location.pathname.startsWith(LEAD_BASE)),
                   })
                 }
               >
@@ -336,7 +408,7 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
                 )}
               </NavLink>
               )
-            ))}
+            )}
           </div>
         </div>
 
@@ -442,6 +514,22 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
         </div>
 
         <div className="space-y-2 border-t border-white/10 pt-4">
+          <NavLink
+            to={ourProductsLink.to}
+            onClick={onCloseMobile}
+            title={ourProductsLink.label}
+            className={navItemClass}
+          >
+            <span className={clsx('flex items-center gap-2', iconOnlyNav && 'justify-center')}>
+              <NavIcon name={ourProductsLink.icon} />
+              {showNavText && <span>{ourProductsLink.label}</span>}
+            </span>
+            {iconOnlyNav && (
+              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-semibold text-dark opacity-0 shadow-panel transition-opacity group-hover:opacity-100">
+                {ourProductsLink.label}
+              </span>
+            )}
+          </NavLink>
           <NavLink
             to={settingsLink.to}
             end

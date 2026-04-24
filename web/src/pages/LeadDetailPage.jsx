@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import clsx from 'clsx';
 import apiClient from '../api/client';
 
@@ -185,12 +185,27 @@ export default function LeadDetailPage() {
 
       {tab === 'followups' && (
         <div className="flux-card space-y-4 p-4 shadow-panel-lg">
+          {item.convertedToCustomer ? (
+            <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm text-slate-700">
+              <p className="font-semibold text-dark">This lead was converted to a customer.</p>
+              <p className="mt-1">Add new follow-ups from the Customers section (linked to the customer record).</p>
+              {item.convertedCustomerId ? (
+                <Link
+                  to={`/dashboard/track/customers/${item.convertedCustomerId}`}
+                  className="mt-3 inline-flex text-sm font-semibold text-primary underline"
+                >
+                  Open customer profile
+                </Link>
+              ) : null}
+            </div>
+          ) : (
           <div className="grid gap-2 sm:grid-cols-2">
             <textarea className="form-textarea sm:col-span-2" rows={3} placeholder="Follow-up note" value={followNote} onChange={(e) => setFollowNote(e.target.value)} />
             <select className="form-select" value={followType} onChange={(e) => setFollowType(e.target.value)}>
               <option value="call">Call</option>
               <option value="visit">Visit</option>
               <option value="message">Message</option>
+              <option value="other">Other</option>
             </select>
             <input type="datetime-local" className="form-input" value={followDate} onChange={(e) => setFollowDate(e.target.value)} />
             <select className="form-select" value={followStatus} onChange={(e) => setFollowStatus(e.target.value)}>
@@ -209,10 +224,11 @@ export default function LeadDetailPage() {
                 </option>
               ))}
             </select>
-            <button type="button" className="btn-primary" onClick={addFollowup}>
+            <button type="button" className="btn-primary" onClick={addFollowup} disabled={item.isLocked}>
               Add follow-up
             </button>
           </div>
+          )}
           <div className="rounded-xl border border-neutral-100">
             <table className="min-w-full text-sm">
               <thead>

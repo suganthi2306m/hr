@@ -2,6 +2,7 @@
 import 'dart:convert';
 
 import 'package:track/models/customer.dart';
+import 'package:track/models/customer_followup_feed.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_client.dart';
 
@@ -98,6 +99,43 @@ class CustomerService {
     final data = response.data;
     if (data == null) throw Exception('Failed to update customer');
     return Customer.fromJson(data);
+  }
+
+  Future<List<CustomerFollowUpFeedItem>> listCustomerFollowUps({
+    String search = '',
+    String status = '',
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    await _setToken();
+    final qp = <String, dynamic>{};
+    if (search.trim().isNotEmpty) qp['search'] = search.trim();
+    if (status.trim().isNotEmpty) qp['status'] = status.trim();
+    if (from != null) qp['from'] = from.toIso8601String();
+    if (to != null) qp['to'] = to.toIso8601String();
+    final response = await _api.dio.get<Map<String, dynamic>>('/customers/followups', queryParameters: qp);
+    final body = response.data;
+    if (body == null) return [];
+    final raw = body['items'];
+    final list = raw is List ? raw : const [];
+    return list.whereType<Map<String, dynamic>>().map(CustomerFollowUpFeedItem.fromJson).toList();
+  }
+
+  Future<void> addCustomerFollowUp({
+    required String customerId,
+    required String note,
+    required String actionType,
+    DateTime? nextFollowUpAt,
+  }) async {
+    await _setToken();
+    await _api.dio.post<Map<String, dynamic>>(
+      '/customers/$customerId/followups',
+      data: {
+        'note': note.trim(),
+        'actionType': actionType,
+        'nextFollowUpAt': nextFollowUpAt?.toIso8601String(),
+      },
+    );
   }
 
   Future<void> deleteCustomer(String id) async {

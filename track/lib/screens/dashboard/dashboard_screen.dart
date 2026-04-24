@@ -5,11 +5,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:track/config/app_colors.dart';
+import 'package:track/config/constants.dart';
 import 'package:track/models/attendance_record.dart';
 import 'package:track/models/task.dart';
 import 'package:track/screens/attendance/attendance_summary_screen.dart';
 import 'package:track/screens/auth/login_screen.dart';
+import 'package:track/models/company_product.dart';
 import 'package:track/screens/customers/company_customers_screen.dart';
+import 'package:track/screens/products/product_detail_screen.dart';
+import 'package:track/screens/products/products_catalog_screen.dart';
 import 'package:track/screens/leads/lead_list_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
 import 'package:track/screens/geo/add_task_screen.dart';
@@ -21,6 +25,7 @@ import 'package:track/services/attendance_alarm_log.dart';
 import 'package:track/services/attendance_alarm_punch_state.dart';
 import 'package:track/services/attendance_alarm_scheduler.dart';
 import 'package:track/services/attendance_service.dart';
+import 'package:track/services/product_service.dart';
 import 'package:track/services/auth_service.dart';
 import 'package:track/services/presence_tracking_service.dart';
 import 'package:track/services/task_service.dart';
@@ -105,6 +110,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   String _userName = 'there';
   List<Task> _tasks = [];
   List<AttendanceRecord> _attendanceHistory = const [];
+  CompanyProductHome _productHome = CompanyProductHome.empty();
+  int _productBannerIndex = 0;
   bool _loading = true;
   String? _userId;
 
@@ -149,10 +156,16 @@ class _DashboardScreenState extends State<DashboardScreen>
         attendance = await att.fetchHistory();
         await AttendanceAlarmPunchState.syncFromHistory(attendance);
       } catch (_) {}
+      CompanyProductHome productHome = CompanyProductHome.empty();
+      try {
+        productHome = await ProductService().fetchHome();
+      } catch (_) {}
       if (mounted) {
         setState(() {
           _tasks = tasks;
           _attendanceHistory = attendance;
+          _productHome = productHome;
+          _productBannerIndex = 0;
           _loading = false;
         });
         unawaited(
@@ -668,6 +681,255 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  void _openProductDetail(BuildContext context, String id) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(builder: (_) => ProductDetailScreen(productId: id)),
+    ).then((_) {
+      if (mounted) _bootstrap();
+    });
+  }
+
+  void _openProductsCatalog(BuildContext context) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(builder: (_) => const ProductsCatalogScreen()),
+    ).then((_) {
+      if (mounted) _bootstrap();
+    });
+  }
+
+  Widget _buildProductsSpotlight(BuildContext context) {
+    final ink = _ink;
+    final banners = _productHome.banners;
+    final highlighted = _productHome.highlighted;
+    if (banners.isEmpty && highlighted.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Our products',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: ink.withValues(alpha: 0.92),
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () => _openProductsCatalog(context),
+              child: Text(
+                'View all',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (banners.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 152,
+            child: PageView.builder(
+              itemCount: banners.length,
+              onPageChanged: (i) => setState(() => _productBannerIndex = i),
+              itemBuilder: (context, i) {
+                final p = banners[i];
+                final url = AppConstants.productImageUrl(
+                  p.bannerImage.isNotEmpty ? p.bannerImage : null,
+                );
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Material(
+                    color: const Color(0xFFF0F0F0),
+                    borderRadius: BorderRadius.circular(22),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => _openProductDetail(context, p.id),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (url.isNotEmpty)
+                            Image.network(
+                              url,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                            ),
+                          Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.bottomCenter,
+                                end: Alignment.topCenter,
+                                colors: [
+                                  ink.withValues(alpha: 0.72),
+                                  ink.withValues(alpha: 0.05),
+                                ],
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                if (p.offerTag.isNotEmpty)
+                                  Container(
+                                    margin: const EdgeInsets.only(bottom: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primary.withValues(alpha: 0.9),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      p.offerTag,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                        color: Color(0xFF1A1A1A),
+                                      ),
+                                    ),
+                                  ),
+                                Text(
+                                  p.name,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w900,
+                                    height: 1.15,
+                                    letterSpacing: -0.3,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          if (banners.length > 1)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  banners.length,
+                  (i) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: i == _productBannerIndex ? 18 : 6,
+                    height: 6,
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(4),
+                      color: i == _productBannerIndex ? AppColors.primary : ink.withValues(alpha: 0.18),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+        if (highlighted.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          Text(
+            'Featured',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: ink.withValues(alpha: 0.55),
+              letterSpacing: 0.2,
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 118,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: highlighted.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (context, i) {
+                final p = highlighted[i];
+                final url = AppConstants.productImageUrl(
+                  p.bannerImage.isNotEmpty ? p.bannerImage : null,
+                );
+                return Material(
+                  color: const Color(0xFFF7F7F7),
+                  borderRadius: BorderRadius.circular(18),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () => _openProductDetail(context, p.id),
+                    child: SizedBox(
+                      width: 220,
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 96,
+                            height: 118,
+                            child: url.isEmpty
+                                ? ColoredBox(color: ink.withValues(alpha: 0.06))
+                                : Image.network(
+                                    url,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) =>
+                                        ColoredBox(color: ink.withValues(alpha: 0.06)),
+                                  ),
+                          ),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    p.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14,
+                                      color: Color(0xFF1A1A1A),
+                                      height: 1.2,
+                                    ),
+                                  ),
+                                  if (p.offerTag.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      p.offerTag,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.primary.withValues(alpha: 0.95),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _shortcutChip({
     IconData? icon,
     Widget? iconWidget,
@@ -809,6 +1071,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                       _buildHeader(context),
                       const SizedBox(height: 22),
                       _yellowProgressCard(summary),
+                      if (_productHome.banners.isNotEmpty || _productHome.highlighted.isNotEmpty) ...[
+                        const SizedBox(height: 22),
+                        _buildProductsSpotlight(context),
+                      ],
                       const SizedBox(height: 22),
                       _buildTodayAttendanceCard(context),
                       const SizedBox(height: 22),

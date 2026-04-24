@@ -265,8 +265,15 @@ async function addFollowUp(req, res, next) {
   try {
     const company = await getCompanyForAdmin(req.admin._id);
     if (!company?._id) return res.status(400).json({ message: 'Complete company setup first.' });
-    const row = await Lead.findOne({ _id: req.params.id, companyId: company._id });
+    const leadIdRaw = req.params.id || req.body.leadId;
+    if (!leadIdRaw || !mongoose.Types.ObjectId.isValid(String(leadIdRaw))) {
+      return res.status(400).json({ message: 'A valid lead id is required.' });
+    }
+    const row = await Lead.findOne({ _id: leadIdRaw, companyId: company._id });
     if (!row) return res.status(404).json({ message: 'Lead not found.' });
+    if (row.convertedToCustomer || row.isLocked) {
+      return res.status(403).json({ message: 'This lead was converted to a customer; add follow-ups under Customers.' });
+    }
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ message: 'Follow-up note is required.' });
     const actionType = ['call', 'visit', 'message', 'other'].includes(String(req.body.actionType || '').toLowerCase())
@@ -321,6 +328,9 @@ async function updateFollowUp(req, res, next) {
     if (!company?._id) return res.status(400).json({ message: 'Complete company setup first.' });
     const row = await Lead.findOne({ _id: req.params.id, companyId: company._id });
     if (!row) return res.status(404).json({ message: 'Lead not found.' });
+    if (row.convertedToCustomer || row.isLocked) {
+      return res.status(403).json({ message: 'This lead is locked after conversion; follow-ups cannot be edited here.' });
+    }
     const follow = await LeadFollowUp.findOne({
       _id: req.params.followUpId,
       leadId: row._id,
@@ -389,18 +399,14 @@ async function listFollowUps(req, res, next) {
     const from = parseDate(req.query.from);
     const to = parseDate(req.query.to);
     const q = { companyId: company._id, leadId: { $in: leadIds } };
-    const hasDateFilter = Boolean(from || to);
-    if (hasDateFilter) {
+    if (from || to) {
       q.nextFollowUpAt = {};
       if (from) q.nextFollowUpAt.$gte = startOfDay(from);
       if (to) q.nextFollowUpAt.$lte = endOfDay(to);
-    } else {
-      const today = new Date();
-      q.nextFollowUpAt = { $gte: startOfDay(today), $lte: endOfDay(today) };
     }
 
     const rows = await LeadFollowUp.find(q)
-      .sort({ nextFollowUpAt: 1, createdAt: -1 })
+      .sort(from || to ? { nextFollowUpAt: 1, createdAt: -1 } : { createdAt: -1 })
       .populate('createdByAdminId', 'name email')
       .populate('createdByUserId', 'name email')
       .lean();

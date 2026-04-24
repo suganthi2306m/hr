@@ -56,11 +56,8 @@ exports.listLeads = async (req, res) => {
       filter.convertedToCustomer = { $ne: true };
       filter.status = { $ne: 'customer' };
     }
-    if (!hasPrivilegedRole(req.user?.role)) {
-      filter.assignedTo = req.user?._id;
-    } else if (req.query.assignedTo && mongoose.Types.ObjectId.isValid(String(req.query.assignedTo))) {
-      filter.assignedTo = req.query.assignedTo;
-    }
+    /** Mobile CRM: only leads assigned to the signed-in user (no company-wide list on app API). */
+    filter.assignedTo = req.user?._id;
     const status = normalizeStatus(req.query.status, '');
     if (status) filter.status = status;
     const search = String(req.query.search || '').trim();
@@ -421,21 +418,14 @@ exports.listFollowUps = async (req, res) => {
       businessId,
       convertedToCustomer: { $ne: true },
       status: { $ne: 'customer' },
+      assignedTo: req.user?._id,
     };
-    const privileged = hasPrivilegedRole(req.user?.role);
-    if (!privileged) {
-      leadFilter.$or = [
-        { assignedTo: req.user?._id },
-        { 'followUps.createdByUserId': req.user?._id },
-        { 'followUps.assignedToUserId': req.user?._id },
-      ];
-    }
     const status = normalizeStatus(req.query.status, '');
     if (status) leadFilter.status = status;
     const search = String(req.query.search || req.query.companyName || req.query.leadName || '').trim();
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      leadFilter.$or = [...(leadFilter.$or || []), { companyName: rx }, { leadName: rx }];
+      leadFilter.$or = [{ companyName: rx }, { phoneNumber: rx }, { emailId: rx }, { leadName: rx }];
     }
     const from = parseDate(req.query.from);
     const to = parseDate(req.query.to);
@@ -451,13 +441,11 @@ exports.listFollowUps = async (req, res) => {
         const createdAt = f.createdAt ? new Date(f.createdAt) : null;
         if (from && (!createdAt || createdAt < from)) return;
         if (to && (!createdAt || createdAt > endOfDay(to))) return;
-        if (!privileged) {
-          const isMine =
-            String(f.createdByUserId?._id || f.createdByUserId || '') === String(req.user?._id || '') ||
-            String(f.assignedToUserId?._id || f.assignedToUserId || '') === String(req.user?._id || '') ||
-            String(l.assignedTo || '') === String(req.user?._id || '');
-          if (!isMine) return;
-        }
+        const isMine =
+          String(f.createdByUserId?._id || f.createdByUserId || '') === String(req.user?._id || '') ||
+          String(f.assignedToUserId?._id || f.assignedToUserId || '') === String(req.user?._id || '') ||
+          String(l.assignedTo || '') === String(req.user?._id || '');
+        if (!isMine) return;
         items.push({
           followUpId: f._id,
           leadId: l._id,
@@ -494,7 +482,7 @@ exports.listUpcomingFollowUps = async (req, res) => {
       status: { $ne: 'customer' },
       'followUps.nextFollowUpAt': { $gte: new Date() },
     };
-    if (!hasPrivilegedRole(req.user?.role)) filter.assignedTo = req.user._id;
+    filter.assignedTo = req.user._id;
     const leads = await Lead.find(filter)
       .select('leadName companyName status assignedTo followUps')
       .populate('assignedTo', 'name email')

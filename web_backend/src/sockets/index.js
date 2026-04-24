@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const {
+  normalizeBrowserOrigin,
   parseCorsOrigins,
   isDevLocalFrontendOrigin,
   isAllowedVercelProjectOrigin,
@@ -11,7 +12,8 @@ function initSocketServer(httpServer) {
       origin(origin, callback) {
         if (!origin) return callback(null, true);
         const list = parseCorsOrigins();
-        if (list.includes(origin)) return callback(null, true);
+        const norm = normalizeBrowserOrigin(origin);
+        if (list.includes(origin) || list.includes(norm)) return callback(null, true);
         if (isAllowedVercelProjectOrigin(origin)) return callback(null, true);
         if (isDevLocalFrontendOrigin(origin)) return callback(null, true);
         return callback(null, false);

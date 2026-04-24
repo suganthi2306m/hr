@@ -4,6 +4,12 @@ const express = require('express');
 const path = require('path');
 const connectDB = require('./src/config/db');
 const cors = require('cors');
+const {
+    normalizeBrowserOrigin,
+    parseCorsOrigins,
+    isDevLocalFrontendOrigin,
+    isAllowedVercelProjectOrigin,
+} = require('./src/utils/corsAllowlist');
 const helmet = require('helmet');
 const { attachSocketIO } = require('./src/socket/socketServer');
 
@@ -16,6 +22,7 @@ const attendanceRoutes = require('./src/routes/attendanceRoutes');
 const leaveRoutes = require('./src/routes/leaveRoutes');
 const companyVisitRoutes = require('./src/routes/companyVisitRoutes');
 const leadRoutes = require('./src/routes/leadRoutes');
+const companyProductRoutes = require('./src/routes/companyProductRoutes');
 
 const app = express();
 
@@ -24,12 +31,10 @@ app.use('/selfie', express.static(path.join(process.cwd(), '..', 'selfie')));
 app.set('trust proxy', 1);
 
 app.use(helmet());
-//cors
-// Configure CORS
-//const allowedOrigins = ['https://ehrms.askeva.io', 'http://ehrms.askeva.io', 'http://localhost:8080', 'http://127.0.0.1:8080'];
 
-// Configure CORS
-const allowedOrigins = ['https://ehrms.askeva.net', 'http://ehrms.askeva.net', 'http://localhost:8080', 'http://127.0.0.1:8080'];
+const parsedCorsOrigins = parseCorsOrigins();
+// eslint-disable-next-line no-console
+console.log('[cors] allow-list (CORS_ORIGIN / defaults):', parsedCorsOrigins.join(' | '));
 
 app.use(cors({
     origin: (origin, callback) => {
@@ -37,13 +42,23 @@ app.use(cors({
         if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
             return callback(null, true);
         }
-        if (allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
+        const norm = normalizeBrowserOrigin(origin);
+        if (parsedCorsOrigins.includes(origin) || parsedCorsOrigins.includes(norm)) {
+            return callback(null, true);
         }
+        if (isAllowedVercelProjectOrigin(origin)) {
+            return callback(null, true);
+        }
+        if (isDevLocalFrontendOrigin(origin)) {
+            return callback(null, true);
+        }
+        // eslint-disable-next-line no-console
+        console.warn('[cors] blocked Origin — set CORS_ORIGIN on Render, e.g. https://your-app.vercel.app');
+        return callback(new Error('Not allowed by CORS'));
     },
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.use(express.json({ limit: '50mb' }));
@@ -65,6 +80,7 @@ app.use('/api/leave', leaveRoutes);
 app.use('/api/company-visits', companyVisitRoutes);
 app.use('/api/ops', require('./src/routes/opsRoutes'));
 app.use('/api/leads', leadRoutes);
+app.use('/api/products', companyProductRoutes);
 
 // Debug: Log all incoming requests (only in development)
 if (process.env.NODE_ENV !== 'production') {

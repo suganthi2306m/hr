@@ -2,35 +2,30 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/client';
 
-const STATUS_OPTIONS = ['', 'new', 'in_progress', 'follow_up', 'won', 'dropped'];
-
-export default function LeadFollowupPage() {
+export default function CustomerFollowupPage() {
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
-  const [leads, setLeads] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [selected, setSelected] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [formLeadId, setFormLeadId] = useState('');
+  const [formCustomerId, setFormCustomerId] = useState('');
   const [formNote, setFormNote] = useState('');
   const [formType, setFormType] = useState('call');
   const [formNext, setFormNext] = useState('');
-  const [formStatusAfter, setFormStatusAfter] = useState('');
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const { data } = await apiClient.get('/leads/followups', {
+      const { data } = await apiClient.get('/customers/followups', {
         params: {
           search: query || undefined,
-          status: status || undefined,
           ...(from && to ? { from, to } : from ? { from } : to ? { to } : {}),
         },
       });
@@ -42,12 +37,12 @@ export default function LeadFollowupPage() {
     }
   };
 
-  const loadLeads = async () => {
+  const loadCustomers = async () => {
     try {
-      const { data } = await apiClient.get('/leads');
-      setLeads(Array.isArray(data?.items) ? data.items : []);
+      const { data } = await apiClient.get('/customers');
+      setCustomers(Array.isArray(data?.items) ? data.items : []);
     } catch {
-      setLeads([]);
+      setCustomers([]);
     }
   };
 
@@ -57,36 +52,25 @@ export default function LeadFollowupPage() {
   }, []);
 
   useEffect(() => {
-    if (showAdd) void loadLeads();
+    if (showAdd) void loadCustomers();
   }, [showAdd]);
 
   const analytics = useMemo(() => {
     const perUser = new Map();
-    const byStatus = new Map();
     let pending = 0;
     let completed = 0;
     items.forEach((x) => {
       const user = x.createdBy?.name || x.createdBy?.email || 'Unknown';
       perUser.set(user, (perUser.get(user) || 0) + 1);
-      byStatus.set(x.status || 'unknown', (byStatus.get(x.status || 'unknown') || 0) + 1);
       if (x.nextFollowUpDate && new Date(x.nextFollowUpDate).getTime() > Date.now()) pending += 1;
       else completed += 1;
     });
-    return { perUser: [...perUser.entries()], byStatus: [...byStatus.entries()], pending, completed };
+    return { perUser: [...perUser.entries()], pending, completed };
   }, [items]);
 
-  const openAddForRow = (row) => {
-    setFormLeadId(row?.leadId ? String(row.leadId) : '');
-    setFormNote('');
-    setFormType('call');
-    setFormNext('');
-    setFormStatusAfter('');
-    setShowAdd(true);
-  };
-
   const submitAdd = async () => {
-    if (!formLeadId) {
-      setError('Select a lead.');
+    if (!formCustomerId) {
+      setError('Select a customer.');
       return;
     }
     if (!formNote.trim()) {
@@ -96,19 +80,17 @@ export default function LeadFollowupPage() {
     setSaving(true);
     setError('');
     try {
-      await apiClient.post('/leads/followups', {
-        leadId: formLeadId,
+      await apiClient.post('/customers/followups', {
+        customerId: formCustomerId,
         note: formNote.trim(),
         actionType: formType,
         nextFollowUpAt: formNext || null,
-        statusAfter: formStatusAfter || null,
       });
       setShowAdd(false);
-      setFormLeadId('');
+      setFormCustomerId('');
       setFormNote('');
       setFormType('call');
       setFormNext('');
-      setFormStatusAfter('');
       await load();
     } catch (e) {
       setError(e?.response?.data?.message || 'Unable to save follow-up.');
@@ -120,62 +102,52 @@ export default function LeadFollowupPage() {
   return (
     <section className="space-y-4">
       <div className="flux-card p-4 shadow-panel-lg">
-        <h2 className="text-lg font-bold text-dark">Follow-up management</h2>
-        <p className="mt-1 text-sm text-slate-500">Each entry is linked to a lead. Converted leads only appear under Customers.</p>
+        <h2 className="text-lg font-bold text-dark">Customer follow-up</h2>
+        <p className="mt-1 text-sm text-slate-500">Each entry is linked to a customer. Use optional date range to filter by next follow-up.</p>
       </div>
       <div className="flux-card p-4 shadow-panel-lg">
-        <div className="grid gap-2 md:grid-cols-5">
-          <input
-            className="form-input md:col-span-2"
-            placeholder="Search lead / company"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <select className="form-select" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All status</option>
-            <option value="new">New</option>
-            <option value="in_progress">In progress</option>
-            <option value="follow_up">Follow-up</option>
-            <option value="won">Won</option>
-            <option value="dropped">Dropped</option>
-          </select>
-          <input type="date" className="form-input" value={from} onChange={(e) => setFrom(e.target.value)} title="Filter by next follow-up from" />
-          <input type="date" className="form-input" value={to} onChange={(e) => setTo(e.target.value)} title="Filter by next follow-up to" />
-        </div>
-        <div className="mt-2 flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            className="btn-secondary inline-flex items-center gap-2"
-            title="Reset filters and reload all"
-            onClick={async () => {
-              setQuery('');
-              setStatus('');
-              setFrom('');
-              setTo('');
-              setLoading(true);
-              setError('');
-              try {
-                const { data } = await apiClient.get('/leads/followups', { params: {} });
-                setItems(Array.isArray(data?.items) ? data.items : []);
-              } catch (e) {
-                setError(e?.response?.data?.message || 'Unable to load follow-ups.');
-              } finally {
-                setLoading(false);
-              }
-            }}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-              <path d="M21 3v6h-6" />
-            </svg>
-            Reset
-          </button>
-          <button type="button" className="btn-primary" onClick={() => void load()}>
-            Apply
-          </button>
-          <button type="button" className="btn-primary" onClick={() => openAddForRow(null)}>
-            Add follow-up
-          </button>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="grid flex-1 gap-2 md:grid-cols-4">
+            <input
+              className="form-input md:col-span-2"
+              placeholder="Search customer / company"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <input type="date" className="form-input" value={from} onChange={(e) => setFrom(e.target.value)} title="From (optional)" />
+            <input type="date" className="form-input" value={to} onChange={(e) => setTo(e.target.value)} title="To (optional)" />
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              title="Clear dates — list all"
+              onClick={async () => {
+                setFrom('');
+                setTo('');
+                setLoading(true);
+                setError('');
+                try {
+                  const { data } = await apiClient.get('/customers/followups', {
+                    params: { search: query || undefined },
+                  });
+                  setItems(Array.isArray(data?.items) ? data.items : []);
+                } catch (e) {
+                  setError(e?.response?.data?.message || 'Unable to load follow-ups.');
+                } finally {
+                  setLoading(false);
+                }
+              }}
+            >
+              Clear dates
+            </button>
+            <button type="button" className="btn-primary" onClick={() => void load()}>
+              Apply
+            </button>
+            <button type="button" className="btn-primary" onClick={() => setShowAdd(true)}>
+              Add follow-up
+            </button>
+          </div>
         </div>
       </div>
       {error && <p className="alert-error">{error}</p>}
@@ -190,21 +162,14 @@ export default function LeadFollowupPage() {
           <p className="text-xs text-slate-500">Follow-ups per user</p>
           <p className="text-sm text-dark">{analytics.perUser.slice(0, 2).map(([u, c]) => `${u}: ${c}`).join(' · ') || '-'}</p>
         </div>
-        <div className="flux-card p-3 shadow-panel-lg">
-          <p className="text-xs text-slate-500">By status</p>
-          <p className="text-sm text-dark">
-            {analytics.byStatus.slice(0, 3).map(([s, c]) => `${String(s).replace(/_/g, ' ')}: ${c}`).join(' · ') || '-'}
-          </p>
-        </div>
       </div>
       <div className="flux-card overflow-hidden p-4 shadow-panel-lg">
         <div className="overflow-x-auto rounded-lg border border-neutral-100">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="px-3 py-2">Lead</th>
+                <th className="px-3 py-2">Customer</th>
                 <th className="px-3 py-2">Company</th>
-                <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">Next follow-up</th>
                 <th className="px-3 py-2">Notes</th>
@@ -216,7 +181,7 @@ export default function LeadFollowupPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td className="px-3 py-8 text-center text-slate-500" colSpan={9}>
+                  <td className="px-3 py-8 text-center text-slate-500" colSpan={8}>
                     Loading follow-ups...
                   </td>
                 </tr>
@@ -227,24 +192,27 @@ export default function LeadFollowupPage() {
                     className="cursor-pointer border-t border-neutral-100 hover:bg-primary/5"
                     onClick={() => setSelected(row)}
                   >
-                    <td className="px-3 py-2 font-semibold text-dark">{row.leadName}</td>
+                    <td className="px-3 py-2 font-semibold text-dark">{row.customerName}</td>
                     <td className="px-3 py-2">{row.companyName}</td>
-                    <td className="px-3 py-2 capitalize">{String(row.status || '-').replace(/_/g, ' ')}</td>
                     <td className="px-3 py-2 capitalize">{row.followUpType || '-'}</td>
                     <td className="px-3 py-2">{row.nextFollowUpDate ? new Date(row.nextFollowUpDate).toLocaleString() : '-'}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{row.notesPreview || '-'}</td>
                     <td className="px-3 py-2">{row.createdBy?.name || row.createdBy?.email || '-'}</td>
                     <td className="px-3 py-2">{row.createdAt ? new Date(row.createdAt).toLocaleString() : '-'}</td>
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                      <button type="button" className="btn-secondary text-xs" onClick={() => openAddForRow(row)}>
-                        Add follow-up
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        onClick={() => navigate(`/dashboard/track/customers/${row.customerId}`)}
+                      >
+                        Open customer
                       </button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td className="px-3 py-8 text-center text-slate-500" colSpan={9}>
+                  <td className="px-3 py-8 text-center text-slate-500" colSpan={8}>
                     No follow-ups found.
                   </td>
                 </tr>
@@ -262,19 +230,21 @@ export default function LeadFollowupPage() {
             </button>
           </div>
           <p className="text-sm text-slate-700">
-            Lead: {selected.leadName} · {selected.companyName}
+            Customer: {selected.customerName} · {selected.companyName}
           </p>
-          <p className="text-sm text-slate-700">
-            Status: {String(selected.status || '-').replace(/_/g, ' ')} · Type: {selected.followUpType || '-'}
-          </p>
+          <p className="text-sm text-slate-700">Type: {selected.followUpType || '-'}</p>
           <p className="text-sm text-slate-700">
             Next: {selected.nextFollowUpDate ? new Date(selected.nextFollowUpDate).toLocaleString() : '-'}
           </p>
           <p className="text-sm text-slate-700">Created by: {selected.createdBy?.name || selected.createdBy?.email || '-'}</p>
           <p className="text-sm text-slate-700">Notes: {selected.notes || '-'}</p>
           <div className="pt-2">
-            <button type="button" className="btn-primary" onClick={() => navigate(`/dashboard/track/leads/${selected.leadId}`)}>
-              Open linked lead
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => navigate(`/dashboard/track/customers/${selected.customerId}`)}
+            >
+              Open linked customer
             </button>
           </div>
         </div>
@@ -284,19 +254,20 @@ export default function LeadFollowupPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
           <div className="flux-card max-h-[90vh] w-full max-w-lg overflow-y-auto p-5 shadow-panel-lg">
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-bold text-dark">Add lead follow-up</h3>
+              <h3 className="text-lg font-bold text-dark">Add customer follow-up</h3>
               <button type="button" className="btn-secondary text-sm" onClick={() => setShowAdd(false)}>
                 Close
               </button>
             </div>
             <div className="space-y-3">
               <div>
-                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Lead</label>
-                <select className="form-select w-full" value={formLeadId} onChange={(e) => setFormLeadId(e.target.value)}>
-                  <option value="">Select lead…</option>
-                  {leads.map((l) => (
-                    <option key={l._id} value={l._id}>
-                      {l.leadName} · {l.companyName}
+                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Customer</label>
+                <select className="form-select w-full" value={formCustomerId} onChange={(e) => setFormCustomerId(e.target.value)}>
+                  <option value="">Select customer…</option>
+                  {customers.map((c) => (
+                    <option key={c._id} value={c._id}>
+                      {c.customerName}
+                      {c.companyName ? ` · ${c.companyName}` : ''}
                     </option>
                   ))}
                 </select>
@@ -319,16 +290,6 @@ export default function LeadFollowupPage() {
                   <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Next follow-up</label>
                   <input type="datetime-local" className="form-input w-full" value={formNext} onChange={(e) => setFormNext(e.target.value)} />
                 </div>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Update lead status (optional)</label>
-                <select className="form-select w-full" value={formStatusAfter} onChange={(e) => setFormStatusAfter(e.target.value)}>
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s === '' ? '__none' : s} value={s}>
-                      {s === '' ? 'No change' : s.replace(/_/g, ' ')}
-                    </option>
-                  ))}
-                </select>
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" className="btn-secondary" onClick={() => setShowAdd(false)} disabled={saving}>

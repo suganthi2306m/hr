@@ -1,9 +1,8 @@
 /**
- * Browser CORS + Socket.IO origin checks.
- * In development, allow common Vite localhost ports so login works when Vite bumps 5173→5174.
+ * Browser CORS (mobile API + optional web clients).
+ * Keep in sync with web_backend/src/utils/corsAllowlist.js where possible.
  */
 
-/** Strip paths/trailing slashes so env can use `https://app.vercel.app/` and still match the browser Origin. */
 function normalizeBrowserOrigin(value) {
   const s = String(value || '').trim();
   if (!s) return '';
@@ -22,14 +21,20 @@ function parseCorsOrigins() {
     .map((s) => normalizeBrowserOrigin(s))
     .filter(Boolean);
   if (list.length) return list;
-  return ['http://localhost:5173', 'http://localhost:5174'];
+  return [
+    'https://ehrms.askeva.net',
+    'http://ehrms.askeva.net',
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://localhost:5173',
+    'http://localhost:5174',
+  ];
 }
 
 function isProduction() {
   return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 }
 
-/** Non-production: http(s)://localhost|127.0.0.1 with typical Vite / CRA dev ports. */
 function isDevLocalFrontendOrigin(origin) {
   if (isProduction() || !origin || typeof origin !== 'string') return false;
   try {
@@ -42,18 +47,13 @@ function isDevLocalFrontendOrigin(origin) {
     if (port >= 5173 && port <= 5199) return true;
     if (port >= 3000 && port <= 3999) return true;
     if (port === 4173) return true;
+    if (port === 8080) return true;
     return false;
   } catch {
     return false;
   }
 }
 
-/**
- * Vercel project name(s) (the first segment of *.vercel.app), comma-separated.
- * Allows production `https://<slug>.vercel.app` and previews `https://<slug>-….vercel.app`
- * without listing each URL in CORS_ORIGIN.
- * When unset, keeps legacy `customerconnect` and LiveTrack HR web `hr-gamma-two`.
- */
 function parseVercelProjectSlugs() {
   const raw = process.env.CORS_VERCEL_SLUGS;
   if (raw != null && String(raw).trim() !== '') {

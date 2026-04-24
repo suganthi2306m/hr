@@ -85,6 +85,9 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
   final TextEditingController _companyCtrl = TextEditingController();
   DateTime? _fromDate;
   DateTime? _toDate;
+  DateTime? _leadFromDate;
+  DateTime? _leadToDate;
+  bool _filtersOpen = false;
 
   static const List<DropdownMenuItem<String>> _statusItems = [
     DropdownMenuItem(value: '', child: Text('All statuses')),
@@ -110,6 +113,8 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
       final rows = await _leadService.listLeads(
         search: _searchCtrl.text.trim(),
         status: _status,
+        from: _leadFromDate,
+        to: _leadToDate,
       );
       final followUps = await _leadService.listFollowUps(
         search: _searchCtrl.text.trim(),
@@ -323,6 +328,7 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                           DropdownMenuItem(value: 'call', child: Text('Call')),
                           DropdownMenuItem(value: 'visit', child: Text('Visit')),
                           DropdownMenuItem(value: 'message', child: Text('Message')),
+                          DropdownMenuItem(value: 'other', child: Text('Other')),
                         ],
                         onChanged: (v) => setLocal(() => actionType = v ?? 'call'),
                       ),
@@ -405,6 +411,46 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
       _followUpPage = 1;
     });
     await _load();
+  }
+
+  Future<void> _pickLeadListDate({required bool from}) async {
+    final now = DateTime.now();
+    final initial = from ? (_leadFromDate ?? now) : (_leadToDate ?? _leadFromDate ?? now);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 3),
+      lastDate: DateTime(now.year + 3),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (from) {
+        _leadFromDate = picked;
+        if (_leadToDate != null && _leadToDate!.isBefore(_leadFromDate!)) _leadToDate = _leadFromDate;
+      } else {
+        _leadToDate = picked;
+      }
+      _leadsPage = 1;
+    });
+    await _load();
+  }
+
+  void _clearLeadDates() {
+    setState(() {
+      _leadFromDate = null;
+      _leadToDate = null;
+      _leadsPage = 1;
+    });
+    _load();
+  }
+
+  void _clearFollowUpDates() {
+    setState(() {
+      _fromDate = null;
+      _toDate = null;
+      _followUpPage = 1;
+    });
+    _load();
   }
 
   void _openFollowUpDetail(FollowUpFeedItem row) {
@@ -518,6 +564,14 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                 color: Colors.black.withValues(alpha: 0.82),
               ),
             ),
+            IconButton(
+              onPressed: () => setState(() => _filtersOpen = !_filtersOpen),
+              icon: Icon(
+                Icons.filter_list_rounded,
+                color: _filtersOpen ? Colors.black : Colors.black.withValues(alpha: 0.82),
+              ),
+              tooltip: 'Filters',
+            ),
           ],
         ),
         body: Column(
@@ -586,73 +640,109 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                     ),
                     onSubmitted: (_) => _load(),
                   ),
-                  if (_tabIndex == 1) ...[
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _companyCtrl,
-                      decoration: InputDecoration(
-                        hintText: 'Filter by company name',
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.search_rounded),
-                          onPressed: _load,
-                        ),
+                  if (_filtersOpen) ...[
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      value: _status.isEmpty ? null : _status,
+                      decoration: const InputDecoration(hintText: 'Lead status'),
+                      items: _statusItems,
+                      onChanged: (v) {
+                        setState(() {
+                          _status = v ?? '';
+                          _leadsPage = 1;
+                          _followUpPage = 1;
+                        });
+                        _load();
+                      },
+                    ),
+                    if (_tabIndex == 0) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Lead created date (optional)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey.shade700),
                       ),
-                      onSubmitted: (_) => _load(),
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: _status.isEmpty ? null : _status,
-                    decoration: const InputDecoration(hintText: 'Filter status'),
-                    items: _statusItems,
-                    onChanged: (v) {
-                      setState(() {
-                        _status = v ?? '';
-                        _leadsPage = 1;
-                        _followUpPage = 1;
-                      });
-                      _load();
-                    },
-                  ),
-                  if (_tabIndex == 1) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => _pickDate(from: true),
-                            child: Text(
-                              _fromDate == null
-                                  ? 'From date'
-                                  : 'From: ${_fromDate!.toLocal().toString().split(' ').first}',
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => _pickLeadListDate(from: true),
+                              child: Text(
+                                _leadFromDate == null
+                                    ? 'From'
+                                    : 'From: ${_leadFromDate!.toLocal().toString().split(' ').first}',
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => _pickDate(from: false),
-                            child: Text(
-                              _toDate == null
-                                  ? 'To date'
-                                  : 'To: ${_toDate!.toLocal().toString().split(' ').first}',
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => _pickLeadListDate(from: false),
+                              child: Text(
+                                _leadToDate == null
+                                    ? 'To'
+                                    : 'To: ${_leadToDate!.toLocal().toString().split(' ').first}',
+                              ),
                             ),
                           ),
+                          IconButton(
+                            tooltip: 'Clear lead dates',
+                            onPressed: _clearLeadDates,
+                            icon: const Icon(Icons.clear_rounded),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if (_tabIndex == 1) ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _companyCtrl,
+                        decoration: InputDecoration(
+                          hintText: 'Filter by company name',
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.search_rounded),
+                            onPressed: _load,
+                          ),
                         ),
-                        IconButton(
-                          tooltip: 'Clear date range',
-                          onPressed: () {
-                            setState(() {
-                              _fromDate = null;
-                              _toDate = null;
-                              _followUpPage = 1;
-                            });
-                            _load();
-                          },
-                          icon: const Icon(Icons.clear_rounded),
-                        ),
-                      ],
-                    ),
+                        onSubmitted: (_) => _load(),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Follow-up created date (optional)',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey.shade700),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => _pickDate(from: true),
+                              child: Text(
+                                _fromDate == null
+                                    ? 'From'
+                                    : 'From: ${_fromDate!.toLocal().toString().split(' ').first}',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => _pickDate(from: false),
+                              child: Text(
+                                _toDate == null
+                                    ? 'To'
+                                    : 'To: ${_toDate!.toLocal().toString().split(' ').first}',
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Clear date range',
+                            onPressed: _clearFollowUpDates,
+                            icon: const Icon(Icons.clear_rounded),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ],
               ),

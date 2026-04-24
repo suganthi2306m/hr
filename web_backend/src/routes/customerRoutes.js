@@ -8,7 +8,9 @@ const {
   deleteCustomer,
   nearbyCustomers,
   listCustomerFollowUps,
+  listAllCustomerFollowUps,
   addCustomerFollowUp,
+  addCustomerFollowUpFromBody,
 } = require('../controllers/customerController');
 const auth = require('../middleware/auth');
 const authorizeRole = require('../middleware/authorizeRole');
@@ -17,6 +19,8 @@ const router = express.Router();
 
 router.get('/', auth, authorizeRole('admin'), listCustomers);
 router.get('/nearby', auth, authorizeRole('admin'), nearbyCustomers);
+router.get('/followups', auth, authorizeRole('admin'), listAllCustomerFollowUps);
+router.post('/followups', auth, authorizeRole('admin'), addCustomerFollowUpFromBody);
 router.get('/:id/followups', auth, authorizeRole('admin'), listCustomerFollowUps);
 router.post('/:id/followups', auth, authorizeRole('admin'), addCustomerFollowUp);
 router.get('/:id/timeline', auth, authorizeRole('admin'), getCustomerTimeline);

@@ -23,6 +23,7 @@ router.post('/', createLead);
 router.get('/report', getLeadReport);
 router.get('/followups', listFollowUps);
 router.get('/followups/upcoming', listUpcomingFollowUps);
+router.post('/followups', addFollowUp);
 router.get('/:id', getLeadById);
 router.put('/:id', updateLead);
 router.post('/:id/followups', addFollowUp);

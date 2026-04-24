@@ -28,4 +28,4 @@ const customerFollowUpSchema = new mongoose.Schema(
 customerFollowUpSchema.index({ companyId: 1, customerId: 1, createdAt: -1 });
 customerFollowUpSchema.index({ companyId: 1, nextFollowUpAt: 1 });
 
-module.exports = mongoose.model('CustomerFollowUp', customerFollowUpSchema);
+module.exports = mongoose.model('CustomerFollowUp', customerFollowUpSchema, 'followupCustomer');

@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 const Customer = require('../models/Customer');
+const CustomerFollowUp = require('../models/CustomerFollowUp');
+const User = require('../models/User');
 const { haversineMeters } = require('../utils/haversine');
 const { forwardGeocodeAddress } = require('../services/geocodingService');
 
@@ -120,6 +122,31 @@ function tenantScopeFilter(businessId) {
     return { $or: [{ businessId: oid }, { companyId: oid }] };
   }
   return { $or: [{ businessId: s }, { companyId: s }] };
+}
+
+function parseFollowDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function endOfDayFollow(d) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+async function validateUserInBusiness(businessId, userId) {
+  const id = String(userId || '').trim();
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
+  const oid = new mongoose.Types.ObjectId(id);
+  const bid =
+    mongoose.Types.ObjectId.isValid(String(businessId).trim()) && String(businessId).trim().length === 24
+      ? new mongoose.Types.ObjectId(String(businessId).trim())
+      : null;
+  if (!bid) return null;
+  const row = await User.findOne({ _id: oid, companyId: bid }).select('_id').lean();
+  return row ? row._id : null;
 }
 
 exports.createCustomer = async (req, res) => {
@@ -425,5 +452,113 @@ exports.updateCustomer = async (req, res) => {
       success: false,
       message: 'Could not update customer. Please try again.',
     });
+  }
+};
+
+/** GET /customers/followups — follow-ups in followupCustomer linked to current user (mobile CRM). */
+exports.listCustomerFollowUpsFeed = async (req, res) => {
+  try {
+    const businessId = resolveBusinessIdFromRequest(req);
+    if (!businessId) return res.status(200).json({ items: [] });
+    const bid =
+      mongoose.Types.ObjectId.isValid(String(businessId).trim()) && String(businessId).trim().length === 24
+        ? new mongoose.Types.ObjectId(String(businessId).trim())
+        : businessId;
+    const q = {
+      businessId: bid,
+      $or: [{ assignedToUserId: req.user._id }, { createdByUserId: req.user._id }],
+    };
+    const from = parseFollowDate(req.query.from);
+    const to = parseFollowDate(req.query.to);
+    if (from || to) {
+      q.createdAt = {};
+      if (from) q.createdAt.$gte = from;
+      if (to) q.createdAt.$lte = endOfDayFollow(to);
+    }
+    const status = String(req.query.status || '').trim().toLowerCase();
+    if (status === 'pending') {
+      q.nextFollowUpAt = { $gt: new Date() };
+    } else if (status === 'overdue') {
+      q.nextFollowUpAt = { $lt: new Date(), $ne: null };
+    }
+    const rows = await CustomerFollowUp.find(q)
+      .sort({ createdAt: -1 })
+      .populate('customerId', 'customerName companyName')
+      .populate('createdByUserId', 'name email')
+      .populate('assignedToUserId', 'name email')
+      .lean();
+    const search = String(req.query.search || '').trim().toLowerCase();
+    let items = rows.map((f) => {
+      const cust = f.customerId;
+      const cid = cust && typeof cust === 'object' && cust._id != null ? cust._id : f.customerId;
+      return {
+        followUpId: f._id,
+        customerId: cid,
+        customerName: cust?.customerName || '',
+        companyName: cust?.companyName || '',
+        followUpType: f.actionType || 'call',
+        nextFollowUpDate: f.nextFollowUpAt || null,
+        notes: f.note || '',
+        notesPreview: String(f.note || '').slice(0, 120),
+        createdBy: f.createdByUserId || null,
+        assignedTo: f.assignedToUserId || null,
+        createdAt: f.createdAt || null,
+        updatedAt: f.updatedAt || null,
+      };
+    });
+    if (search) {
+      items = items.filter((x) => {
+        const blob = `${x.customerName} ${x.companyName} ${x.notes}`.toLowerCase();
+        return blob.includes(search);
+      });
+    }
+    return res.status(200).json({ items });
+  } catch (e) {
+    console.error('[Customers] listCustomerFollowUpsFeed', e);
+    return res.status(500).json({ message: e.message || 'Failed to fetch customer follow-ups.' });
+  }
+};
+
+/** POST /customers/:id/followups */
+exports.addCustomerFollowUp = async (req, res) => {
+  try {
+    const businessId = resolveBusinessIdFromRequest(req);
+    if (!businessId) return res.status(400).json({ success: false, message: 'Company missing on account.' });
+    const idStr = String(req.params.id || '').trim();
+    if (!mongoose.Types.ObjectId.isValid(idStr) || idStr.length !== 24) {
+      return res.status(400).json({ success: false, message: 'Invalid customer id.' });
+    }
+    const oid = new mongoose.Types.ObjectId(idStr);
+    const customer = await Customer.findOne({ _id: oid, ...tenantScopeFilter(businessId) }).select('_id').lean();
+    if (!customer) return res.status(404).json({ success: false, message: 'Customer not found.' });
+    const note = String(req.body.note || '').trim();
+    if (!note) return res.status(400).json({ success: false, message: 'Follow-up note is required.' });
+    const actionType = ['call', 'visit', 'message', 'other'].includes(String(req.body.actionType || '').toLowerCase())
+      ? String(req.body.actionType).toLowerCase()
+      : 'call';
+    const nextFollowUpAt = parseFollowDate(req.body.nextFollowUpAt);
+    let assignee = req.user._id;
+    if (req.body.assignedToUserId != null && String(req.body.assignedToUserId).trim()) {
+      const v = await validateUserInBusiness(businessId, req.body.assignedToUserId);
+      if (!v) return res.status(400).json({ success: false, message: 'Invalid assignee.' });
+      assignee = v;
+    }
+    const bid =
+      mongoose.Types.ObjectId.isValid(String(businessId).trim()) && String(businessId).trim().length === 24
+        ? new mongoose.Types.ObjectId(String(businessId).trim())
+        : businessId;
+    const row = await CustomerFollowUp.create({
+      businessId: bid,
+      customerId: oid,
+      note,
+      actionType,
+      nextFollowUpAt,
+      createdByUserId: req.user._id,
+      assignedToUserId: assignee,
+    });
+    return res.status(201).json({ item: row });
+  } catch (e) {
+    console.error('[Customers] addCustomerFollowUp', e);
+    return res.status(500).json({ success: false, message: e.message || 'Failed to add follow-up.' });
   }
 };

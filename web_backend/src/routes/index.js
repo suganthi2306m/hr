@@ -10,6 +10,7 @@ const geofenceRoutes = require('./geofenceRoutes');
 const operationsRoutes = require('./operationsRoutes');
 const companyVisitRoutes = require('./companyVisitRoutes');
 const leadRoutes = require('./leadRoutes');
+const companyProductRoutes = require('./companyProductRoutes');
 const superAdminRoutes = require('./superAdminRoutes');
 const subscriptionRoutes = require('./subscriptionRoutes');
 const auth = require('../middleware/auth');
@@ -30,6 +31,7 @@ function registerRoutes(app) {
   app.use('/api/ops', operationsRoutes);
   app.use('/api/company-visits', companyVisitRoutes);
   app.use('/api/leads', leadRoutes);
+  app.use('/api/company-products', companyProductRoutes);
 }
 
 module.exports = registerRoutes;

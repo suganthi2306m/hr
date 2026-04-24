@@ -20,6 +20,7 @@ const {
 } = require('./services/bootstrapService');
 const { startLocationRealtime } = require('./services/locationRealtimeService');
 const {
+  normalizeBrowserOrigin,
   parseCorsOrigins,
   parseVercelProjectSlugs,
   isDevLocalFrontendOrigin,
@@ -61,7 +62,10 @@ app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
-      if (parsedCorsOrigins.includes(origin)) return callback(null, origin);
+      const normalized = normalizeBrowserOrigin(origin);
+      if (parsedCorsOrigins.includes(normalized) || parsedCorsOrigins.includes(origin)) {
+        return callback(null, origin);
+      }
       if (isAllowedVercelProjectOrigin(origin)) {
         // eslint-disable-next-line no-console
         console.log('[cors] allowing Vercel host:', origin);

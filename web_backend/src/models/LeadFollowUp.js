@@ -30,4 +30,4 @@ const leadFollowUpSchema = new mongoose.Schema(
 leadFollowUpSchema.index({ companyId: 1, leadId: 1, createdAt: -1 });
 leadFollowUpSchema.index({ companyId: 1, nextFollowUpAt: 1 });
 
-module.exports = mongoose.model('LeadFollowUp', leadFollowUpSchema);
+module.exports = mongoose.model('LeadFollowUp', leadFollowUpSchema, 'followupLead');

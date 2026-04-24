@@ -13,6 +13,7 @@ const OrganizationSetupPage = lazy(() => import('./pages/OrganizationSetupPage')
 const OrganizationInfoPage = lazy(() => import('./pages/OrganizationInfoPage'));
 const RolesPermissionsPage = lazy(() => import('./pages/RolesPermissionsPage'));
 const CustomersPage = lazy(() => import('./pages/CustomersPage'));
+const CustomerFollowupPage = lazy(() => import('./pages/CustomerFollowupPage'));
 const CustomerDetailPage = lazy(() => import('./pages/CustomerDetailPage'));
 const FieldTasksPage = lazy(() => import('./pages/FieldTasksPage'));
 const VisitsPage = lazy(() => import('./pages/VisitsPage'));
@@ -40,6 +41,7 @@ const GeofencesPage = lazy(() => import('./pages/GeofencesPage'));
 const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const PlatformModulesPage = lazy(() => import('./pages/PlatformModulesPage'));
 const SubscriptionBillingPage = lazy(() => import('./pages/SubscriptionBillingPage'));
+const OurProductsPage = lazy(() => import('./pages/OurProductsPage'));
 const SuperAdminLayout = lazy(() => import('./pages/superadmin/SuperAdminLayout'));
 const SuperAdminDashboardPage = lazy(() => import('./pages/superadmin/SuperAdminDashboardPage'));
 const SuperAdminCompaniesPage = lazy(() => import('./pages/superadmin/SuperAdminCompaniesPage'));
@@ -114,6 +116,7 @@ function App() {
         <Route index element={withSuspense(<HomeDashboardPage />)} />
         <Route path="profile" element={withSuspense(<ProfilePage />)} />
         <Route path="billing" element={withSuspense(<SubscriptionBillingPage />)} />
+        <Route path="our-products" element={withSuspense(<OurProductsPage />)} />
         <Route path="settings/organization-info" element={withSuspense(<OrganizationInfoPage />)} />
         <Route path="settings/organization" element={withSuspense(<OrganizationSetupPage />)} />
         <Route path="settings/roles" element={withSuspense(<RolesPermissionsPage />)} />
@@ -123,9 +126,10 @@ function App() {
         <Route path="users/import" element={withSuspense(<UsersImportPage />)} />
         <Route path="users/:id/employee" element={withSuspense(<EmployeeOnboardingPage />)} />
         <Route path="users/:id" element={withSuspense(<UserDetailsPage />)} />
+        <Route path="track/customers/follow-up" element={withSuspense(<CustomerFollowupPage />)} />
+        <Route path="track/customers/import" element={withSuspense(<CustomersImportPage />)} />
         <Route path="track/customers/:customerId" element={withSuspense(<CustomerDetailPage />)} />
         <Route path="track/customers" element={withSuspense(<CustomersPage />)} />
-        <Route path="track/customers/import" element={withSuspense(<CustomersImportPage />)} />
         <Route path="track/fieldtasks" element={withSuspense(<FieldTasksPage />)} />
         <Route path="track/visits/:visitId" element={withSuspense(<VisitDetailPage />)} />
         <Route path="track/visits" element={withSuspense(<VisitsPage />)} />
