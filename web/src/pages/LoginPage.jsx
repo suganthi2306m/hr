@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import QRCodeLib from 'qrcode';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { postPublicAuth } from '../api/client';
@@ -59,6 +60,8 @@ function LoginPage() {
   const [signupPaymentState, setSignupPaymentState] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
+  const [signupQrDataUrl, setSignupQrDataUrl] = useState('');
+  const [signupQrError, setSignupQrError] = useState('');
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -179,6 +182,31 @@ function LoginPage() {
       setSignupLoadingPlans(false);
     }
   };
+
+  useEffect(() => {
+    let active = true;
+    setSignupQrDataUrl('');
+    setSignupQrError('');
+    const checkoutUrl = String(signupPayment?.checkoutUrl || '').trim();
+    if (!checkoutUrl) return () => {};
+    QRCodeLib.toDataURL(checkoutUrl, {
+      width: 220,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#111827', light: '#ffffff' },
+    })
+      .then((url) => {
+        if (!active) return;
+        setSignupQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSignupQrError('Could not generate QR. Open payment page to continue.');
+      });
+    return () => {
+      active = false;
+    };
+  }, [signupPayment?.checkoutUrl]);
 
   const startSignupPayment = async (event) => {
     event.preventDefault();
@@ -591,6 +619,18 @@ function LoginPage() {
                 <div className="form-stack">
                   <p className="text-sm text-slate-600">
                     Plan: <strong>{signupPayment.planName}</strong> | Amount: INR {signupPayment.gatewayAmount || signupPayment.amount}
+                  </p>
+                  <div className="flex justify-center rounded-xl border border-neutral-200 bg-white p-3">
+                    {signupQrDataUrl ? (
+                      <img src={signupQrDataUrl} alt="Payment QR code" className="h-[210px] w-[210px] rounded-lg object-contain" />
+                    ) : (
+                      <div className="flex h-[210px] w-[210px] items-center justify-center text-center text-xs text-slate-500">
+                        {signupQrError || 'Generating QR...'}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-center text-xs text-slate-500">
+                    Scan this QR in UPI app or open payment page.
                   </p>
                   <a href={signupPayment.checkoutUrl} target="_blank" rel="noreferrer" className="btn-primary w-full py-3 text-center">
                     Open payment page

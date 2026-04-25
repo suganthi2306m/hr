@@ -39,6 +39,26 @@ Future<bool> _isStoppedByUser(int id) async {
       prefs.getBool(_kAlarmStopAllPrefsKey) == true;
 }
 
+Future<bool> _isAlarmNotificationStillVisible(
+  FlutterLocalNotificationsPlugin notifications,
+  int id,
+) async {
+  if (!Platform.isAndroid) return true;
+  try {
+    final active = await notifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.getActiveNotifications();
+    if (active == null) return true;
+    return active.any((n) => n.id == id);
+  } catch (e) {
+    // If platform does not expose active notifications on this device/API, do not block ringing.
+    attendanceAlarmLog('RING activeNotifications check failed id=$id err=$e');
+    return true;
+  }
+}
+
 Future<void> _clearStoppedByUser(int id) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.remove(_stopPrefKey(id));
@@ -240,6 +260,11 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
     while (DateTime.now().isBefore(deadline)) {
       if (await _isStoppedByUser(id)) {
         attendanceAlarmLog('RING stopped by user action id=$id');
+        break;
+      }
+      final stillVisible = await _isAlarmNotificationStillVisible(notifications, id);
+      if (!stillVisible) {
+        attendanceAlarmLog('RING stopped because notification dismissed id=$id');
         break;
       }
       await Future<void>.delayed(const Duration(milliseconds: 250));
