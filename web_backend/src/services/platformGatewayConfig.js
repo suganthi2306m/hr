@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const PlatformSettings = require('../models/PlatformSettings');
 const Admin = require('../models/Admin');
 const Company = require('../models/Company');
+const { resolveDefaultCatalogOwnerAdmin } = require('./superAdminOwnerResolver');
 const { decryptSecret } = require('./fieldCrypto');
 const { validatePaysharpApiBaseUrlInput } = require('./paysharpService');
 
@@ -32,8 +33,8 @@ function readPlainFromDoc(doc, dotPath) {
 async function resolveSubscriptionCatalogOwnerId(company) {
   if (!company) return null;
   if (company.createdBySuperAdminId) return company.createdBySuperAdminId;
-  const main = await Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 }).select('_id').lean();
-  return main?._id || null;
+  const owner = await resolveDefaultCatalogOwnerAdmin();
+  return owner?._id || null;
 }
 
 async function resolveSubscriptionCatalogOwnerIdFromCompanyId(companyId) {

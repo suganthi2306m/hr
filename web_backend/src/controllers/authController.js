@@ -11,6 +11,7 @@ const { sendPasswordResetOtp: sendOtpEmail } = require('../services/emailService
 const { createRazorpayPaymentLink } = require('../services/razorpayService');
 const { createPaysharpCheckout, fetchPaysharpUpiOrderStatus } = require('../services/paysharpService');
 const { getRazorpayConfig, getPaysharpConfig } = require('../services/platformGatewayConfig');
+const { resolveDefaultCatalogOwnerAdmin, getPreferredSuperAdminEmail } = require('../services/superAdminOwnerResolver');
 const { generateUniqueLicenseKey } = require('../services/licenseKeyService');
 const { applyCapturedSubscriptionPayment } = require('../services/subscriptionEntitlementService');
 const { normalizeEmail, assertCompanyEmailPhoneUnique, assertAdminEmailAvailable } = require('../utils/contactUniqueness');
@@ -80,17 +81,19 @@ function computeAmountPaise(plan, durationMonths) {
   return { amountPaise, dm };
 }
 
-async function getPrimaryMainSuperAdmin() {
-  const main = await Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 });
-  if (!main) {
-    const err = new Error('Main super admin account is not configured.');
+async function getPrimaryCatalogOwnerAdmin() {
+  const owner = await resolveDefaultCatalogOwnerAdmin();
+  if (!owner) {
+    const err = new Error(
+      `No active billing super admin found. Configure ${getPreferredSuperAdminEmail()} or a main super admin account.`,
+    );
     err.status = 503;
     throw err;
   }
-  return main;
+  return owner;
 }
 
-async function ensureSelfSignupAdminAndCompany({ companyName, email, phone, mainSuperAdminId }) {
+async function ensureSelfSignupAdminAndCompany({ companyName, email, phone, catalogOwnerAdminId }) {
   let admin = await Admin.findOne({ email });
   if (admin && admin.role !== 'admin') {
     const err = new Error('This email is already used by a platform admin account.');
@@ -119,7 +122,7 @@ async function ensureSelfSignupAdminAndCompany({ companyName, email, phone, main
     await assertCompanyEmailPhoneUnique(null, email, phone);
     company = await Company.create({
       adminId: admin._id,
-      createdBySuperAdminId: mainSuperAdminId,
+      createdBySuperAdminId: catalogOwnerAdminId,
       name: companyName,
       address: 'Pending profile completion',
       phone,
@@ -135,14 +138,14 @@ async function ensureSelfSignupAdminAndCompany({ companyName, email, phone, main
     company.name = companyName;
     company.phone = phone;
     company.email = email;
-    company.createdBySuperAdminId = mainSuperAdminId;
+    company.createdBySuperAdminId = catalogOwnerAdminId;
     await company.save();
   }
 
   return { admin, company };
 }
 
-async function ensureLicenseForCompany(company, plan, mainSuperAdminId) {
+async function ensureLicenseForCompany(company, plan, catalogOwnerAdminId) {
   let lic = await License.findOne({ companyId: company._id }).sort({ updatedAt: -1 });
   const now = new Date();
   if (!lic) {
@@ -160,7 +163,7 @@ async function ensureLicenseForCompany(company, plan, mainSuperAdminId) {
       status: 'suspended',
       isTrial: false,
       notes: 'Self-signup: activates after payment capture',
-      createdByAdminId: mainSuperAdminId,
+      createdByAdminId: catalogOwnerAdminId,
     });
   } else {
     lic.planId = plan._id;
@@ -168,7 +171,7 @@ async function ensureLicenseForCompany(company, plan, mainSuperAdminId) {
     lic.planName = plan.name;
     lic.maxUsers = plan.maxUsers;
     lic.maxBranches = plan.maxBranches;
-    lic.createdByAdminId = mainSuperAdminId;
+    lic.createdByAdminId = catalogOwnerAdminId;
     if (!lic.validUntil) lic.validUntil = now;
     await lic.save();
   }
@@ -304,8 +307,8 @@ async function resetPasswordWithOtp(req, res, next) {
 
 async function listSignupPlans(_req, res, next) {
   try {
-    const main = await getPrimaryMainSuperAdmin();
-    const items = await SubscriptionPlan.find({ isActive: true, createdByAdminId: main._id })
+    const owner = await getPrimaryCatalogOwnerAdmin();
+    const items = await SubscriptionPlan.find({ isActive: true, createdByAdminId: owner._id })
       .sort({ priceInr: 1, name: 1 })
       .lean();
     return res.json({ items });
@@ -330,21 +333,21 @@ async function initiateSelfSignupPayment(req, res, next) {
       return res.status(400).json({ message: 'Valid plan is required.' });
     }
 
-    const main = await getPrimaryMainSuperAdmin();
+    const owner = await getPrimaryCatalogOwnerAdmin();
     const plan = await SubscriptionPlan.findOne({
       _id: planId,
       isActive: true,
-      createdByAdminId: main._id,
+      createdByAdminId: owner._id,
     }).lean();
-    if (!plan) return res.status(400).json({ message: 'Plan not found for main super admin catalog.' });
+    if (!plan) return res.status(400).json({ message: 'Plan not found for default billing super admin catalog.' });
 
     const { admin, company } = await ensureSelfSignupAdminAndCompany({
       companyName,
       email,
       phone,
-      mainSuperAdminId: main._id,
+      catalogOwnerAdminId: owner._id,
     });
-    const lic = await ensureLicenseForCompany(company, plan, main._id);
+    const lic = await ensureLicenseForCompany(company, plan, owner._id);
 
     const { amountPaise, dm } = computeAmountPaise(plan, durationMonths);
     const gatewayAmount =
@@ -361,7 +364,7 @@ async function initiateSelfSignupPayment(req, res, next) {
       durationMonths: dm,
       licenseId: lic._id,
       initiatedBy: admin._id,
-      billingAdminId: main._id,
+      billingAdminId: owner._id,
       gateway,
       method: gateway === 'razorpay' ? 'payment_link' : 'checkout',
       status: 'created',
@@ -373,9 +376,9 @@ async function initiateSelfSignupPayment(req, res, next) {
     await pay.save();
 
     if (gateway === 'razorpay') {
-      const rz = await getRazorpayConfig({ billingAdminId: main._id });
+      const rz = await getRazorpayConfig({ billingAdminId: owner._id });
       if (!rz.keyId || !rz.keySecret) {
-        return res.status(400).json({ message: 'Razorpay is not configured for main super admin.' });
+        return res.status(400).json({ message: 'Razorpay is not configured for the default billing super admin.' });
       }
       const fe = String(process.env.FRONTEND_URL || process.env.WEB_APP_URL || '').trim() || 'http://localhost:5174';
       const callbackUrl = `${fe.replace(/\/$/, '')}/login`;
@@ -407,9 +410,9 @@ async function initiateSelfSignupPayment(req, res, next) {
       );
     }
 
-    const paysharp = await getPaysharpConfig({ billingAdminId: main._id });
+    const paysharp = await getPaysharpConfig({ billingAdminId: owner._id });
     if (!paysharp.enabled || !paysharp.apiKey || !String(paysharp.apiBaseUrl || '').trim()) {
-      return res.status(400).json({ message: 'Paysharp is not configured for main super admin.' });
+      return res.status(400).json({ message: 'Paysharp is not configured for the default billing super admin.' });
     }
     const result = await createPaysharpCheckout({
       apiKey: paysharp.apiKey,

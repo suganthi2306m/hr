@@ -45,8 +45,6 @@ const configurationLinks = [
   { to: '/dashboard/settings/organization', label: 'Organization setup', icon: 'org' },
 ];
 
-const ourProductsLink = { to: '/dashboard/our-products', label: 'Our Products', icon: 'products' };
-
 const supportLink = { to: '/dashboard/support', label: 'Support', icon: 'support' };
 
 const settingsLink = { to: '/dashboard/settings', label: 'Settings', icon: 'settings' };
@@ -523,22 +521,6 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
         </div>
 
         <div className="space-y-2 border-t border-white/10 pt-4">
-          <NavLink
-            to={ourProductsLink.to}
-            onClick={onCloseMobile}
-            title={ourProductsLink.label}
-            className={navItemClass}
-          >
-            <span className={clsx('flex items-center gap-2', iconOnlyNav && 'justify-center')}>
-              <NavIcon name={ourProductsLink.icon} />
-              {showNavText && <span>{ourProductsLink.label}</span>}
-            </span>
-            {iconOnlyNav && (
-              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-semibold text-dark opacity-0 shadow-panel transition-opacity group-hover:opacity-100">
-                {ourProductsLink.label}
-              </span>
-            )}
-          </NavLink>
           <NavLink
             to={supportLink.to}
             onClick={onCloseMobile}
