@@ -210,13 +210,24 @@ function LoginPage() {
     };
   }, [signupPayment?.checkoutUrl]);
 
+  useEffect(() => {
+    if (!signupPaymentPopup || signupPaymentPopup.type !== 'success') return () => {};
+    const t = setTimeout(() => {
+      setSignupPaymentPopup(null);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [signupPaymentPopup]);
+
   const startSignupPayment = async (event) => {
     event.preventDefault();
     setSignupBusy(true);
     setSignupError('');
     setSignupPaymentState('');
     try {
-      const data = await postPublicAuth('/auth/register/initiate-payment', signupForm);
+      const data = await postPublicAuth('/auth/register/initiate-payment', {
+        ...signupForm,
+        gateway: 'paysharp',
+      });
       setSignupPayment(data);
     } catch (e) {
       setSignupError(e.response?.data?.message || 'Could not start payment.');
@@ -257,6 +268,62 @@ function LoginPage() {
       setSignupBusy(false);
     }
   };
+
+  useEffect(() => {
+    const paymentId = String(signupPayment?.paymentId || '').trim();
+    const payerEmail = String(signupForm.email || '').trim().toLowerCase();
+    if (!paymentId || !payerEmail) return () => {};
+    if (signupPaymentState === 'captured' || signupPaymentState === 'failed') return () => {};
+
+    let alive = true;
+    let inFlight = false;
+
+    const tick = async () => {
+      if (!alive || inFlight) return;
+      inFlight = true;
+      try {
+        const data = await postPublicAuth(`/auth/register/payments/${encodeURIComponent(paymentId)}/refresh`, {
+          email: payerEmail,
+        });
+        const status = String(data?.item?.status || '').toLowerCase();
+        if (!alive) return;
+        if (status === 'captured' || status === 'paid') {
+          setSignupPaymentState('captured');
+          setSignupPaymentPopup({
+            type: 'success',
+            message: 'Payment successful',
+            detail: 'Your payment is captured. Continue to set password.',
+          });
+        } else if (status === 'failed') {
+          setSignupPaymentState('failed');
+          setSignupPaymentPopup({
+            type: 'failed',
+            message: 'Payment failed',
+            detail: 'The payment was not completed. Retry payment.',
+          });
+        } else {
+          setSignupPaymentState('pending');
+        }
+      } catch {
+        // keep silent; manual refresh button remains available
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const immediate = setTimeout(() => {
+      void tick();
+    }, 1500);
+    const id = setInterval(() => {
+      void tick();
+    }, 3000);
+
+    return () => {
+      alive = false;
+      clearTimeout(immediate);
+      clearInterval(id);
+    };
+  }, [signupPayment?.paymentId, signupForm.email, signupPaymentState]);
 
   const completeSignup = async (event) => {
     event.preventDefault();
@@ -318,23 +385,23 @@ function LoginPage() {
                 <p className="text-sm opacity-90">{signupPaymentPopup.detail}</p>
               </div>
             </div>
-            <button
-              type="button"
-              className={`mt-4 w-full rounded-lg px-3 py-2 text-sm font-semibold ${
-                signupPaymentPopup.type === 'success'
-                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                  : 'bg-red-600 text-white hover:bg-red-700'
-              }`}
-              onClick={() => setSignupPaymentPopup(null)}
-            >
-              OK
-            </button>
+            {signupPaymentPopup.type === 'success' ? (
+              <p className="mt-4 text-center text-xs font-medium text-emerald-700">Continuing...</p>
+            ) : (
+              <button
+                type="button"
+                className="mt-4 w-full rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700"
+                onClick={() => setSignupPaymentPopup(null)}
+              >
+                OK
+              </button>
+            )}
           </div>
         </div>
       ) : null}
 
       <div className="animate-slide-up mx-auto flex min-h-[74vh] w-full max-w-5xl items-center justify-center rounded-[2rem] border border-white/10 bg-white/95 p-1.5 shadow-panel-lg backdrop-blur-sm">
-        <section className="hidden h-full w-1/2 rounded-2xl bg-primary p-8 text-dark lg:block">
+        <section className="hidden h-full min-h-[680px] w-1/2 rounded-2xl bg-primary p-8 text-dark lg:block">
           <div className="mb-8">
             <img src={logoImg} alt="LiveTrack" width={48} height={48} className="h-12 w-12 rounded-xl object-contain" />
           </div>
@@ -638,22 +705,9 @@ function LoginPage() {
                       required
                     />
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      className={`btn-secondary flex-1 ${signupForm.gateway === 'paysharp' ? 'ring-2 ring-primary/40' : ''}`}
-                      onClick={() => setSignupForm((p) => ({ ...p, gateway: 'paysharp' }))}
-                    >
-                      Paysharp
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn-secondary flex-1 ${signupForm.gateway === 'razorpay' ? 'ring-2 ring-primary/40' : ''}`}
-                      onClick={() => setSignupForm((p) => ({ ...p, gateway: 'razorpay' }))}
-                    >
-                      Razorpay
-                    </button>
-                  </div>
+                  <p className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-center text-sm font-semibold text-dark">
+                    Payment gateway: Paysharp
+                  </p>
                   <button type="submit" disabled={signupBusy || signupLoadingPlans} className="btn-primary w-full py-3 disabled:cursor-not-allowed">
                     {signupBusy ? 'Starting payment...' : 'Proceed to payment'}
                   </button>
@@ -685,9 +739,6 @@ function LoginPage() {
                   <p className="text-center text-xs text-slate-500">
                     Scan this QR in UPI app or open payment page.
                   </p>
-                  <a href={signupPayment.checkoutUrl} target="_blank" rel="noreferrer" className="btn-primary w-full py-3 text-center">
-                    Open payment page
-                  </a>
                   <button type="button" className="btn-secondary w-full" onClick={refreshSignupPayment} disabled={signupBusy}>
                     {signupBusy ? 'Checking...' : "I've paid - Check status"}
                   </button>

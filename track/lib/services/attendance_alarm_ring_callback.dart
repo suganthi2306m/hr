@@ -14,6 +14,7 @@ import 'attendance_alarm_log.dart';
 import 'attendance_alarm_punch_state.dart';
 
 const Duration _kAlarmRingDuration = Duration(seconds: 20);
+const Duration _kStopCheckInterval = Duration(milliseconds: 50);
 const String _kAlarmAssetPath = 'audio/alarm.wav';
 const String _kAlarmStopActionId = 'attendance_alarm_stop';
 const String _kAlarmStopPrefsPrefix = 'attendance_alarm_stop_';
@@ -268,15 +269,20 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
     while (DateTime.now().isBefore(deadline)) {
       if (await _isStoppedByUser(id)) {
         attendanceAlarmLog('RING stopped by user action id=$id');
+        await player.stop();
+        attendanceAlarmLog('RING stopped immediately id=$id');
         break;
       }
       final stillVisible = await _isAlarmNotificationStillVisible(notifications, id);
       if (!stillVisible) {
         attendanceAlarmLog('RING stopped because notification dismissed id=$id');
+        await player.stop();
+        attendanceAlarmLog('RING stopped immediately on dismiss id=$id');
         break;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await Future<void>.delayed(_kStopCheckInterval);
     }
+    // Ensure we are fully stopped even when loop exits by timeout.
     await player.stop();
     attendanceAlarmLog('RING finished id=$id');
   } catch (e, st) {
