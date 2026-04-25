@@ -62,6 +62,7 @@ function LoginPage() {
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
   const [signupQrDataUrl, setSignupQrDataUrl] = useState('');
   const [signupQrError, setSignupQrError] = useState('');
+  const [signupPaymentPopup, setSignupPaymentPopup] = useState(null);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -159,6 +160,7 @@ function LoginPage() {
     setSignupPayment(null);
     setSignupPassword('');
     setSignupConfirmPassword('');
+    setSignupPaymentPopup(null);
   };
 
   const openSignup = async () => {
@@ -234,8 +236,18 @@ function LoginPage() {
       const status = String(data?.item?.status || '').toLowerCase();
       if (status === 'captured' || status === 'paid') {
         setSignupPaymentState('captured');
+        setSignupPaymentPopup({
+          type: 'success',
+          message: 'Payment successful',
+          detail: 'Your payment is captured. Continue to set password.',
+        });
       } else if (status === 'failed') {
         setSignupPaymentState('failed');
+        setSignupPaymentPopup({
+          type: 'failed',
+          message: 'Payment failed',
+          detail: 'The payment was not completed. Retry payment.',
+        });
       } else {
         setSignupPaymentState('pending');
       }
@@ -280,6 +292,47 @@ function LoginPage() {
         backgroundAttachment: 'fixed',
       }}
     >
+      {signupPaymentPopup ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 p-4">
+          <div
+            className={`w-full max-w-sm rounded-2xl border px-5 py-5 shadow-2xl ${
+              signupPaymentPopup.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : 'border-red-200 bg-red-50 text-red-900'
+            }`}
+            role="alertdialog"
+            aria-live="assertive"
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className={`flex h-10 w-10 items-center justify-center rounded-full text-xl font-black ${
+                  signupPaymentPopup.type === 'success'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-red-100 text-red-700'
+                }`}
+              >
+                {signupPaymentPopup.type === 'success' ? '✓' : 'x'}
+              </div>
+              <div>
+                <p className="text-lg font-bold">{signupPaymentPopup.message}</p>
+                <p className="text-sm opacity-90">{signupPaymentPopup.detail}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`mt-4 w-full rounded-lg px-3 py-2 text-sm font-semibold ${
+                signupPaymentPopup.type === 'success'
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                  : 'bg-red-600 text-white hover:bg-red-700'
+              }`}
+              onClick={() => setSignupPaymentPopup(null)}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="animate-slide-up mx-auto flex min-h-[74vh] w-full max-w-5xl items-center justify-center rounded-[2rem] border border-white/10 bg-white/95 p-1.5 shadow-panel-lg backdrop-blur-sm">
         <section className="hidden h-full w-1/2 rounded-2xl bg-primary p-8 text-dark lg:block">
           <div className="mb-8">

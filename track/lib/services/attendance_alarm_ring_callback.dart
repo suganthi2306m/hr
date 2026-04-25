@@ -179,7 +179,14 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
           attendanceAlarmNotificationTapBackground,
       onDidReceiveNotificationResponse: (response) {
         if (response.actionId == _kAlarmStopActionId && (response.id ?? -1) >= 0) {
-          unawaited(_setStoppedByUser(response.id!));
+          unawaited(() async {
+            await _setStopAllByUser();
+            await _setStoppedByUser(response.id!);
+            try {
+              await FlutterLocalNotificationsPlugin().cancel(response.id!);
+            } catch (_) {}
+            attendanceAlarmLog('RING stop action tapped (foreground callback) id=${response.id}');
+          }());
         }
       },
     );
@@ -213,8 +220,8 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
         icon: '@drawable/ic_notification',
         category: AndroidNotificationCategory.alarm,
         fullScreenIntent: true,
-        ongoing: true,
-        autoCancel: false,
+        ongoing: false,
+        autoCancel: true,
         onlyAlertOnce: false,
         playSound: true,
         enableVibration: true,
@@ -229,7 +236,8 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
             _kAlarmStopActionId,
             'Stop',
             cancelNotification: true,
-            showsUserInterface: false,
+            // Foreground delivery is more reliable across OEMs than background-only callbacks.
+            showsUserInterface: true,
           ),
         ],
       );
