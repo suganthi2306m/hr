@@ -176,6 +176,8 @@ function DashboardLayout() {
     pathSegments[0] === 'operations' && pathSegments[1] === 'attendance' && pathSegments[2] === 'approval';
   const isAttendanceOvertimePage =
     pathSegments[0] === 'operations' && pathSegments[1] === 'attendance' && pathSegments[2] === 'overtime';
+  const isOurProductsDash = pathSegments[0] === 'our-products';
+  const isSupportDash = pathSegments[0] === 'support';
   const pageTitle = isEmployeeOnboarding
     ? pathSegments[1] === 'new'
       ? 'Add employee'
@@ -190,9 +192,13 @@ function DashboardLayout() {
           ? 'Approvals'
           : isAttendanceOvertimePage
             ? 'Overtime'
-            : pathSegments.length
-              ? prettifySegment(pathSegments[pathSegments.length - 1])
-              : 'Dashboard';
+            : isOurProductsDash
+              ? 'Our products'
+              : isSupportDash
+                ? 'Support'
+                : pathSegments.length
+                  ? prettifySegment(pathSegments[pathSegments.length - 1])
+                  : 'Dashboard';
 
   useEffect(() => {
     if (['superadmin', 'mainsuperadmin'].includes(admin?.role)) {
@@ -251,6 +257,10 @@ function DashboardLayout() {
                 <span className="text-primary">Live</span>
                 <span className="text-dark"> track</span>
               </h1>
+            ) : isOurProductsDash || isSupportDash ? (
+              <h1 className="min-w-0 truncate text-xl font-black tracking-tight sm:text-2xl">
+                <span className="text-primary">{isSupportDash ? 'Support' : 'Our products'}</span>
+              </h1>
             ) : (
               <TwoToneTitle text={pageTitle} />
             )}
@@ -263,19 +273,28 @@ function DashboardLayout() {
         </div>
         {isDashboardHome ? (
           <header className="mb-6 rounded-2xl border border-neutral-200/90 bg-white p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
-              <div>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 flex-1">
                 <h2 className="text-xl font-bold tracking-tight text-dark">Welcome, {admin?.name || 'Admin'}</h2>
                 <p className="mt-1 text-sm text-slate-500">Monitor users, tasks and live field movement in one place.</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsMobileSidebarOpen(true)}
-                className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-dark shadow-sm hover:bg-neutral-50 md:hidden"
-              >
-                <MenuIcon />
-                Menu
-              </button>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => navigate('/dashboard/our-products')}
+                  className="rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-dark shadow-sm transition hover:brightness-95"
+                >
+                  Our Products
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileSidebarOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-dark shadow-sm hover:bg-neutral-50 md:hidden"
+                >
+                  <MenuIcon />
+                  Menu
+                </button>
+              </div>
             </div>
           </header>
         ) : (

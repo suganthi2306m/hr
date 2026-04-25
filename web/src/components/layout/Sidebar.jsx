@@ -47,6 +47,8 @@ const configurationLinks = [
 
 const ourProductsLink = { to: '/dashboard/our-products', label: 'Our Products', icon: 'products' };
 
+const supportLink = { to: '/dashboard/support', label: 'Support', icon: 'support' };
+
 const settingsLink = { to: '/dashboard/settings', label: 'Settings', icon: 'settings' };
 
 function MenuIcon({ className = 'h-4 w-4' }) {
@@ -153,6 +155,13 @@ function NavIcon({ name }) {
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
           <path d="M3.27 6.96 12 12.01l8.73-5.05" />
           <path d="M12 22.08V12" />
+        </svg>
+      );
+    case 'support':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <path d="M18 18.5a2.5 2.5 0 0 0 2.5-2.5V9a7 7 0 1 0-14 0v7a2.5 2.5 0 0 0 2.5 2.5h9Z" />
+          <path d="M9 18v2a3 3 0 0 0 6 0v-2" strokeLinecap="round" />
         </svg>
       );
     case 'billing':
@@ -527,6 +536,22 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
             {iconOnlyNav && (
               <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-semibold text-dark opacity-0 shadow-panel transition-opacity group-hover:opacity-100">
                 {ourProductsLink.label}
+              </span>
+            )}
+          </NavLink>
+          <NavLink
+            to={supportLink.to}
+            onClick={onCloseMobile}
+            title={supportLink.label}
+            className={navItemClass}
+          >
+            <span className={clsx('flex items-center gap-2', iconOnlyNav && 'justify-center')}>
+              <NavIcon name={supportLink.icon} />
+              {showNavText && <span>{supportLink.label}</span>}
+            </span>
+            {iconOnlyNav && (
+              <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 z-50 -translate-y-1/2 whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-semibold text-dark opacity-0 shadow-panel transition-opacity group-hover:opacity-100">
+                {supportLink.label}
               </span>
             )}
           </NavLink>

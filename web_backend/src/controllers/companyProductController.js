@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const Company = require('../models/Company');
 const CompanyProduct = require('../models/CompanyProduct');
 
@@ -10,11 +9,13 @@ function toItem(doc) {
   const p = doc && typeof doc.toObject === 'function' ? doc.toObject() : doc;
   return {
     id: String(p._id),
-    companyId: String(p.companyId),
+    companyId: p.companyId != null ? String(p.companyId) : '',
+    portfolioWide: Boolean(p.portfolioSuperAdminId),
     name: p.name,
     shortDescription: p.shortDescription || '',
     fullDescription: p.fullDescription || '',
     bannerImage: p.bannerImage || '',
+    videoUrl: p.videoUrl || '',
     images: Array.isArray(p.images) ? p.images.filter(Boolean) : [],
     price: p.price != null ? p.price : null,
     offerTag: p.offerTag || '',
@@ -50,6 +51,7 @@ function parseBody(body, { partial } = { partial: false }) {
   if (!partial || body.shortDescription != null) next.shortDescription = String(body.shortDescription || '').trim();
   if (!partial || body.fullDescription != null) next.fullDescription = String(body.fullDescription || '').trim();
   if (!partial || body.bannerImage != null) next.bannerImage = String(body.bannerImage || '').trim();
+  if (!partial || body.videoUrl != null) next.videoUrl = String(body.videoUrl || '').trim();
   if (!partial || body.images != null || body.imagesText != null) next.images = parseImages(body);
   if (!partial || body.price !== undefined) {
     if (body.price === '' || body.price == null) next.price = null;
@@ -74,79 +76,24 @@ function parseBody(body, { partial } = { partial: false }) {
   return next;
 }
 
+function productScopeOrForCompany(companyDocId, partnerSuperAdminId) {
+  const or = [{ companyId: companyDocId }];
+  if (partnerSuperAdminId) {
+    or.push({ companyId: null, portfolioSuperAdminId: partnerSuperAdminId });
+  }
+  return { $or: or };
+}
+
 async function listProducts(req, res, next) {
   try {
     const company = await getCompanyForAdmin(req.admin._id);
     if (!company?._id) return res.status(400).json({ message: 'Complete company setup first.' });
-    const items = await CompanyProduct.find({ companyId: company._id }).sort({ updatedAt: -1 }).lean();
+    const co = await Company.findById(company._id).select('createdBySuperAdminId').lean();
+    const partnerId = co?.createdBySuperAdminId;
+    const items = await CompanyProduct.find(productScopeOrForCompany(company._id, partnerId))
+      .sort({ updatedAt: -1 })
+      .lean();
     return res.json({ items: items.map((p) => toItem(p)) });
-  } catch (e) {
-    return next(e);
-  }
-}
-
-async function createProduct(req, res, next) {
-  try {
-    const company = await getCompanyForAdmin(req.admin._id);
-    if (!company?._id) return res.status(400).json({ message: 'Complete company setup first.' });
-    const raw = parseBody(req.body || {}, { partial: false });
-    if (!raw.name) return res.status(400).json({ message: 'Product name is required.' });
-    const doc = await CompanyProduct.create({
-      companyId: company._id,
-      ...raw,
-    });
-    return res.status(201).json({ item: toItem(doc) });
-  } catch (e) {
-    return next(e);
-  }
-}
-
-async function updateProduct(req, res, next) {
-  try {
-    const company = await getCompanyForAdmin(req.admin._id);
-    if (!company?._id) return res.status(400).json({ message: 'Complete company setup first.' });
-    const id = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid product id.' });
-    const existing = await CompanyProduct.findOne({ _id: id, companyId: company._id });
-    if (!existing) return res.status(404).json({ message: 'Product not found.' });
-    const raw = parseBody(req.body || {}, { partial: true });
-    if (raw.name !== undefined) {
-      if (!String(raw.name).trim()) return res.status(400).json({ message: 'Product name cannot be empty.' });
-      existing.name = raw.name;
-    }
-    for (const k of [
-      'shortDescription',
-      'fullDescription',
-      'bannerImage',
-      'images',
-      'price',
-      'offerTag',
-      'showInApp',
-      'highlightProduct',
-      'showOnHomeBanner',
-      'status',
-      'ctaLabel',
-      'ctaType',
-      'ctaValue',
-    ]) {
-      if (raw[k] !== undefined) existing[k] = raw[k];
-    }
-    await existing.save();
-    return res.json({ item: toItem(existing) });
-  } catch (e) {
-    return next(e);
-  }
-}
-
-async function deleteProduct(req, res, next) {
-  try {
-    const company = await getCompanyForAdmin(req.admin._id);
-    if (!company?._id) return res.status(400).json({ message: 'Complete company setup first.' });
-    const id = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid product id.' });
-    const r = await CompanyProduct.deleteOne({ _id: id, companyId: company._id });
-    if (!r.deletedCount) return res.status(404).json({ message: 'Product not found.' });
-    return res.json({ ok: true });
   } catch (e) {
     return next(e);
   }
@@ -154,7 +101,7 @@ async function deleteProduct(req, res, next) {
 
 module.exports = {
   listProducts,
-  createProduct,
-  updateProduct,
-  deleteProduct,
+  toItem,
+  parseBody,
+  productScopeOrForCompany,
 };

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import apiClient, { getApiErrorMessage } from '../../api/client';
 import SlideOverPanel from '../../components/common/SlideOverPanel';
+import { useAuth } from '../../context/AuthContext';
 
 export default function SuperAdminPlansPage() {
+  const { admin } = useAuth();
   const [items, setItems] = useState([]);
   const [q, setQ] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
@@ -118,6 +120,12 @@ export default function SuperAdminPlansPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="mt-1 text-sm text-slate-600">Define user and branch limits for each tier.</p>
+          {admin?.role === 'mainsuperadmin' ? (
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-slate-500">
+              Only plans in <span className="font-semibold text-slate-600">your</span> catalog appear here. Companies you provision from this
+              account use the same catalog for billing and renewals (other super admins have their own catalogs).
+            </p>
+          ) : null}
         </div>
         <button type="button" onClick={openPanel} className="btn-primary px-4 py-2.5 text-sm">
           + Create plan

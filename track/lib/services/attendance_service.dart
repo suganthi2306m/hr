@@ -186,9 +186,9 @@ class AttendanceService {
         .toList();
   }
 
-  /// Returns current user's shift information and week-off weekdays.
-  /// Backend shape:
-  /// { success, data: { shiftId, shiftName, startTime, endTime, weekOffWeekdays: [1..7] } }
+  /// Returns current user's shift, week-off rules, and holidays for the month.
+  /// Backend `data` includes `weekOffWeekdays` (Dart Mon=1…Sun=7), optional `weeklyOff`
+  /// (same shape as web `orgSetup.weeklyOff`), and `holidays: [{ymd,name},…]`.
   Future<AttendanceAlarmSettings> fetchAttendanceAlarms() async {
     await _setAuthToken();
     final res = await _api.request<Map<String, dynamic>>(

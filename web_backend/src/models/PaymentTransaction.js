@@ -12,6 +12,8 @@ const paymentTransactionSchema = new mongoose.Schema(
     durationMonths: { type: Number, default: 12, min: 1, max: 120 },
     licenseId: { type: mongoose.Schema.Types.ObjectId, ref: 'License', default: null },
     initiatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
+    /** Super admin whose gateway credentials were used (see Company.createdBySuperAdminId). */
+    billingAdminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null, index: true },
     gateway: { type: String, default: 'razorpay', trim: true },
     method: { type: String, default: 'link', trim: true },
     status: { type: String, default: 'created', trim: true },

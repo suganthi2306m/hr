@@ -89,6 +89,14 @@ export default function CompanySubscriptionProfileCard({
             <dd className="mt-0.5 font-medium">{planLine}</dd>
           </div>
         ) : null}
+        {sub.isTrial ? (
+          <div>
+            <dt className={clsx('text-xs font-semibold uppercase', isDark ? 'text-slate-500' : 'text-slate-500')}>License type</dt>
+            <dd className={clsx('mt-0.5 font-medium', isDark ? 'text-amber-200' : 'text-amber-800')}>
+              Trial — access ends on the date below; upgrade to a paid term to continue.
+            </dd>
+          </div>
+        ) : null}
         {sub.expiresAt ? (
           <div>
             <dt className={clsx('text-xs font-semibold uppercase', isDark ? 'text-slate-500' : 'text-slate-500')}>

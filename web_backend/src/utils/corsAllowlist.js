@@ -15,23 +15,33 @@ function normalizeBrowserOrigin(value) {
   }
 }
 
+/** Always merged so local Vite works even when CORS_ORIGIN lists only production (e.g. Vercel). */
+const DEFAULT_LOCAL_FRONTEND_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
+
 function parseCorsOrigins() {
   const raw = process.env.CORS_ORIGIN || process.env.FRONTEND_URL || '';
-  const list = raw
+  const fromEnv = raw
     .split(',')
     .map((s) => normalizeBrowserOrigin(s))
     .filter(Boolean);
-  if (list.length) return list;
-  return ['http://localhost:5173', 'http://localhost:5174'];
+  return [...new Set([...DEFAULT_LOCAL_FRONTEND_ORIGINS, ...fromEnv])];
 }
 
 function isProduction() {
   return String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 }
 
-/** Non-production: http(s)://localhost|127.0.0.1 with typical Vite / CRA dev ports. */
-function isDevLocalFrontendOrigin(origin) {
-  if (isProduction() || !origin || typeof origin !== 'string') return false;
+/**
+ * Local machine browser hitting the API (Vite, CRA, preview). Not gated on NODE_ENV so
+ * `NODE_ENV=production` on a laptop still allows http://localhost:5173 → http://localhost:5000.
+ */
+function isLocalhostDevFrontendOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return false;
   try {
     const u = new URL(origin);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
@@ -42,10 +52,17 @@ function isDevLocalFrontendOrigin(origin) {
     if (port >= 5173 && port <= 5199) return true;
     if (port >= 3000 && port <= 3999) return true;
     if (port === 4173) return true;
+    if (port === 8080) return true;
     return false;
   } catch {
     return false;
   }
+}
+
+/** Non-production only (legacy); prefer [isLocalhostDevFrontendOrigin] in CORS callback. */
+function isDevLocalFrontendOrigin(origin) {
+  if (isProduction() || !origin || typeof origin !== 'string') return false;
+  return isLocalhostDevFrontendOrigin(origin);
 }
 
 /**
@@ -91,6 +108,7 @@ module.exports = {
   parseCorsOrigins,
   parseVercelProjectSlugs,
   isProduction,
+  isLocalhostDevFrontendOrigin,
   isDevLocalFrontendOrigin,
   isAllowedVercelProjectOrigin,
 };

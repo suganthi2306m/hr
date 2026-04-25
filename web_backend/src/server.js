@@ -23,7 +23,7 @@ const {
   normalizeBrowserOrigin,
   parseCorsOrigins,
   parseVercelProjectSlugs,
-  isDevLocalFrontendOrigin,
+  isLocalhostDevFrontendOrigin,
   isAllowedVercelProjectOrigin,
 } = require('./utils/corsAllowlist');
 
@@ -71,11 +71,11 @@ app.use(
         console.log('[cors] allowing Vercel host:', origin);
         return callback(null, origin);
       }
-      if (isDevLocalFrontendOrigin(origin)) {
+      if (isLocalhostDevFrontendOrigin(origin)) {
         if (!devCorsOriginLogged.has(origin)) {
           devCorsOriginLogged.add(origin);
           // eslint-disable-next-line no-console
-          console.log('[cors] allowing dev localhost frontend (NODE_ENV!=production):', origin);
+          console.log('[cors] allowing localhost dev frontend:', origin);
         }
         return callback(null, origin);
       }

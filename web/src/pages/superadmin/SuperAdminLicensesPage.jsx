@@ -13,6 +13,18 @@ async function copyToClipboard(text) {
   }
 }
 
+function findPlan(plans, planId) {
+  return (plans || []).find((p) => String(p._id) === String(planId || '')) || null;
+}
+
+/** End-of-day style default for paid licenses: today + durationMonths (calendar months). */
+function paidDefaultValidUntilYmd(plan) {
+  const months = Math.max(1, Number(plan?.durationMonths) || 12);
+  const d = new Date();
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+
 function PencilIcon({ className = 'h-4 w-4' }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden>
@@ -77,6 +89,12 @@ export default function SuperAdminLicensesPage() {
   }, [load]);
 
   useEffect(() => {
+    const p = findPlan(plans, createForm.planId);
+    if (!p || Number(p.trialDays) > 0) return;
+    setCreateForm((f) => (f.isTrial ? { ...f, isTrial: false } : f));
+  }, [createForm.planId, plans]);
+
+  useEffect(() => {
     if (!inspectId) {
       setLicenseDetail(null);
       return undefined;
@@ -128,6 +146,10 @@ export default function SuperAdminLicensesPage() {
     if (!Number.isFinite(mu) || mu < 1) return 'Max users must be at least 1.';
     const mb = Number(createForm.maxBranches);
     if (!Number.isFinite(mb) || mb < 1) return 'Max branches must be at least 1.';
+    if (createForm.isTrial) {
+      const p = findPlan(plans, createForm.planId);
+      if (!p || !(Number(p.trialDays) > 0)) return 'This plan does not support trial.';
+    }
     return '';
   };
 
@@ -165,14 +187,17 @@ export default function SuperAdminLicensesPage() {
     setSaving(true);
     setError('');
     try {
-      await apiClient.patch(`/super/licenses/${inspectId}`, {
+      const patch = {
         planId: editForm.planId,
         maxUsers: Number(editForm.maxUsers),
         maxBranches: Number(editForm.maxBranches),
-        validUntil: editForm.validUntil || undefined,
         notes: editForm.notes,
         isTrial: editForm.isTrial,
-      });
+      };
+      if (!editForm.isTrial) {
+        patch.validUntil = editForm.validUntil || undefined;
+      }
+      await apiClient.patch(`/super/licenses/${inspectId}`, patch);
       setInspectMode('view');
       const { data } = await apiClient.get(`/super/licenses/${inspectId}`);
       setLicenseDetail(data.item);
@@ -393,7 +418,8 @@ export default function SuperAdminLicensesPage() {
             >
               {plans.map((p) => (
                 <option key={p._id} value={p._id}>
-                  {p.name} — ₹{p.priceInr}/yr
+                  {p.name} — ₹{p.priceInr} / {p.durationMonths || 12} mo
+                  {Number(p.trialDays) > 0 ? ` · trial ${p.trialDays}d` : ''}
                 </option>
               ))}
             </select>
@@ -433,10 +459,37 @@ export default function SuperAdminLicensesPage() {
                 type="checkbox"
                 className="form-checkbox"
                 checked={createForm.isTrial}
+                disabled={(() => {
+                  const p = findPlan(plans, createForm.planId);
+                  return !p || !(Number(p.trialDays) > 0);
+                })()}
                 onChange={(e) => setCreateForm({ ...createForm, isTrial: e.target.checked })}
               />
               Trial license
             </label>
+            {(() => {
+              const p = findPlan(plans, createForm.planId);
+              if (!p) return null;
+              if (createForm.isTrial && Number(p.trialDays) > 0) {
+                return (
+                  <p className="mt-2 text-xs text-slate-600">
+                    This license will be valid for <span className="font-semibold text-dark">{p.trialDays}</span> days based on the
+                    plan trial. Valid until is set automatically and cannot be edited for trials.
+                  </p>
+                );
+              }
+              if (!createForm.isTrial) {
+                return (
+                  <p className="mt-2 text-xs text-slate-600">
+                    Paid term defaults to <span className="font-semibold text-dark">{p.durationMonths || 12}</span> month(s) from
+                    today (plan duration). You can adjust validity when editing an assigned license if your process allows it.
+                  </p>
+                );
+              }
+              return (
+                <p className="mt-2 text-xs text-amber-800">This plan has no trial days — trial is not available.</p>
+              );
+            })()}
           </div>
           <div className="form-field">
             <label htmlFor="sa-lic-notes" className="form-label-muted">
@@ -507,7 +560,14 @@ export default function SuperAdminLicensesPage() {
                 { label: 'Max users', value: lic.maxUsers },
                 { label: 'Max branches', value: lic.maxBranches },
                 { label: 'Status', value: lic.derivedStatus || lic.status, highlight: true },
-                { label: 'Valid from', value: lic.createdAt ? String(lic.createdAt).slice(0, 10) : '—' },
+                {
+                  label: 'Valid from',
+                  value: lic.validFrom
+                    ? String(lic.validFrom).slice(0, 10)
+                    : lic.createdAt
+                      ? String(lic.createdAt).slice(0, 10)
+                      : '—',
+                },
                 { label: 'Valid until', value: lic.validUntil ? String(lic.validUntil).slice(0, 10) : '—' },
                 { label: 'Trial', value: lic.isTrial ? 'Yes' : 'No' },
               ].map((cell) => (
@@ -557,7 +617,19 @@ export default function SuperAdminLicensesPage() {
                 id="edit-lic-plan"
                 className="form-select"
                 value={editForm.planId}
-                onChange={(e) => setEditForm({ ...editForm, planId: e.target.value })}
+                onChange={(e) => {
+                  const pid = e.target.value;
+                  setEditForm((f) => {
+                    const plan = findPlan(plans, pid);
+                    const next = { ...f, planId: pid };
+                    if (!f.isTrial && plan) next.validUntil = paidDefaultValidUntilYmd(plan);
+                    if (f.isTrial && plan && !(Number(plan.trialDays) > 0)) {
+                      next.isTrial = false;
+                      next.validUntil = paidDefaultValidUntilYmd(plan);
+                    }
+                    return next;
+                  });
+                }}
               >
                 {plans.map((p) => (
                   <option key={p._id} value={p._id}>
@@ -594,18 +666,36 @@ export default function SuperAdminLicensesPage() {
                 />
               </div>
             </div>
-            <div className="form-field">
-              <label className="form-label" htmlFor="edit-lic-until">
-                Valid until
-              </label>
-              <input
-                id="edit-lic-until"
-                type="date"
-                className="form-input"
-                value={editForm.validUntil}
-                onChange={(e) => setEditForm({ ...editForm, validUntil: e.target.value })}
-              />
-            </div>
+            {editForm.isTrial ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-3 text-sm text-amber-950">
+                {(() => {
+                  const p = findPlan(plans, editForm.planId);
+                  const d = p && Number(p.trialDays) > 0 ? p.trialDays : null;
+                  return d ? (
+                    <p>
+                      Trial validity is fixed from the plan: <span className="font-semibold">{d} days</span> from the license start.
+                      Valid until cannot be edited for trial licenses.
+                    </p>
+                  ) : (
+                    <p>This plan does not define trial days; turn off trial or pick another plan.</p>
+                  );
+                })()}
+              </div>
+            ) : (
+              <div className="form-field">
+                <label className="form-label" htmlFor="edit-lic-until">
+                  Valid until
+                </label>
+                <input
+                  id="edit-lic-until"
+                  type="date"
+                  className="form-input"
+                  value={editForm.validUntil}
+                  onChange={(e) => setEditForm({ ...editForm, validUntil: e.target.value })}
+                />
+                <p className="mt-1 text-xs text-slate-500">Defaults to full plan duration; adjust only if your policy allows.</p>
+              </div>
+            )}
             <div className="form-field">
               <label className="form-label" htmlFor="edit-lic-notes">
                 Notes
@@ -623,7 +713,18 @@ export default function SuperAdminLicensesPage() {
                 type="checkbox"
                 className="form-checkbox"
                 checked={editForm.isTrial}
-                onChange={(e) => setEditForm({ ...editForm, isTrial: e.target.checked })}
+                disabled={(() => {
+                  const p = findPlan(plans, editForm.planId);
+                  return !p || !(Number(p.trialDays) > 0);
+                })()}
+                onChange={(e) => {
+                  const trial = e.target.checked;
+                  setEditForm((f) => {
+                    if (trial) return { ...f, isTrial: true };
+                    const plan = findPlan(plans, f.planId);
+                    return { ...f, isTrial: false, validUntil: plan ? paidDefaultValidUntilYmd(plan) : f.validUntil };
+                  });
+                }}
               />
               Trial license
             </label>

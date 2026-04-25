@@ -13,6 +13,7 @@ const baseNav = [
   { to: '/super/notifications', label: 'Notifications', icon: 'bell', badge: 0 },
   { to: '/super/plans', label: 'Plans', icon: 'layers' },
   { to: '/super/integrations', label: 'Integrations', icon: 'plug' },
+  { to: '/super/our-products', label: 'Our Products', icon: 'products' },
   { to: '/super/settings', label: 'Settings', icon: 'gear' },
 ];
 
@@ -104,6 +105,15 @@ function NavIcon({ name }) {
           <path d="M12 22v-5M9 8V2M15 8V2M5 8h14v5a7 7 0 0 1-14 0V8z" />
         </svg>
       );
+    case 'products':
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+          <path d="M16.5 9.4 7.55 4.24" />
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+          <path d="M3.27 6.96 12 12.01l8.73-5.05" />
+          <path d="M12 22.08V12" />
+        </svg>
+      );
     case 'gear':
       return (
         <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -127,6 +137,9 @@ function pageTitleParts(pathname) {
   if (seg[0] === 'super' && seg[1] === 'super-admins' && seg[2] && /^[a-f0-9]{24}$/i.test(seg[2])) {
     return { first: 'Super admin', second: 'detail' };
   }
+  if (seg[0] === 'super' && seg[1] === 'our-products') {
+    return { first: 'Our products', second: '' };
+  }
   const last = seg[seg.length - 1] || 'dashboard';
   const clean = last.replace(/[-_]+/g, ' ');
   const t = clean.charAt(0).toUpperCase() + clean.slice(1);
@@ -141,6 +154,7 @@ export default function SuperAdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
 
   const titleParts = useMemo(() => pageTitleParts(location.pathname), [location.pathname]);
+  const isOurProductsPage = /\/super\/our-products\/?$/.test(location.pathname);
 
   const handleLogout = () => {
     logout();
@@ -156,7 +170,9 @@ export default function SuperAdminLayout() {
 
   const showNavText = !collapsed;
   const nav = useMemo(() => {
-    const list = [...baseNav];
+    const list = baseNav.filter(
+      (item) => !(admin?.role === 'mainsuperadmin' && item.to === '/super/our-products'),
+    );
     if (admin?.role === 'mainsuperadmin') {
       list.splice(1, 0, { to: '/super/super-admins', label: 'Super Admins', icon: 'users' });
     }
@@ -242,11 +258,20 @@ export default function SuperAdminLayout() {
 
       <main className="relative min-w-0 flex-1 overflow-x-hidden p-3 sm:p-4 md:min-h-screen md:rounded-[2rem] md:bg-flux-panel md:p-6 md:shadow-panel-lg lg:p-8">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="min-w-0 truncate text-xl font-black tracking-tight sm:text-2xl">
+          <h1 className="min-w-0 flex-1 truncate text-xl font-black tracking-tight sm:text-2xl">
             <span className="text-primary">{titleParts.first}</span>
             {titleParts.second ? <span className="text-dark"> {titleParts.second}</span> : null}
           </h1>
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            {isOurProductsPage ? (
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('livetrack-superadmin-add-product'))}
+                className="rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-dark shadow-sm transition hover:brightness-95"
+              >
+                Add product
+              </button>
+            ) : null}
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-dark shadow-sm">
               {initials}
             </div>

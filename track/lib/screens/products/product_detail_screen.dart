@@ -4,6 +4,7 @@ import 'package:track/config/constants.dart';
 import 'package:track/models/company_product.dart';
 import 'package:track/services/product_service.dart';
 import 'package:track/widgets/location_loader.dart';
+import 'package:track/widgets/product_inline_video.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const _kProductInk = Color(0xFF1A1A1A);
@@ -133,12 +134,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
   Widget _buildBody(BuildContext context, CompanyProductDetail d) {
     final gallery = _galleryUrls(d);
+    final sectionLabelStyle = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.6,
+      color: _kProductInk.withValues(alpha: 0.45),
+    );
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(0, 0, 0, 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (gallery.isNotEmpty)
+          if (gallery.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Text('PHOTOS', style: sectionLabelStyle),
+            ),
+            const SizedBox(height: 10),
             SizedBox(
               height: 220,
               child: PageView.builder(
@@ -164,8 +176,13 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   );
                 },
               ),
-            )
-          else
+            ),
+          ] else ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: Text('PHOTOS', style: sectionLabelStyle),
+            ),
+            const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Container(
@@ -178,6 +195,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 child: Icon(Icons.image_not_supported_outlined, size: 40, color: _kProductInk.withValues(alpha: 0.25)),
               ),
             ),
+          ],
           if (gallery.length > 1)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -197,6 +215,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 ),
               ),
             ),
+          if (d.videoUrl.trim().isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+              child: Text('VIDEO', style: sectionLabelStyle),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              child: ProductInlineVideo(videoUrl: d.videoUrl),
+            ),
+          ],
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
             child: Column(
@@ -240,7 +268,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   ),
                 ],
                 if (d.fullDescription.isNotEmpty) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 18),
+                  Text('DETAILS', style: sectionLabelStyle),
+                  const SizedBox(height: 8),
                   Text(
                     d.fullDescription,
                     style: TextStyle(
@@ -250,7 +280,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     ),
                   ),
                 ] else if (d.shortDescription.isNotEmpty) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 18),
+                  Text('DETAILS', style: sectionLabelStyle),
+                  const SizedBox(height: 8),
                   Text(
                     d.shortDescription,
                     style: TextStyle(

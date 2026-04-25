@@ -2,11 +2,13 @@ const mongoose = require('mongoose');
 
 const companyProductSchema = new mongoose.Schema(
   {
-    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+    portfolioSuperAdminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null, index: true },
     name: { type: String, required: true, trim: true },
     shortDescription: { type: String, trim: true, default: '' },
     fullDescription: { type: String, trim: true, default: '' },
     bannerImage: { type: String, trim: true, default: '' },
+    videoUrl: { type: String, trim: true, default: '' },
     images: [{ type: String, trim: true }],
     price: { type: Number, default: null },
     offerTag: { type: String, trim: true, default: '' },
@@ -22,5 +24,17 @@ const companyProductSchema = new mongoose.Schema(
 );
 
 companyProductSchema.index({ companyId: 1, status: 1, showInApp: 1 });
+companyProductSchema.index({ portfolioSuperAdminId: 1, status: 1, showInApp: 1 });
+
+companyProductSchema.pre('validate', function companyProductScopeXor() {
+  const hasCo = this.companyId != null;
+  const hasP = this.portfolioSuperAdminId != null;
+  if (!hasCo && !hasP) {
+    this.invalidate('companyId', 'Set companyId or portfolioSuperAdminId.');
+  }
+  if (hasCo && hasP) {
+    this.invalidate('companyId', 'Use only one of companyId or portfolioSuperAdminId.');
+  }
+});
 
 module.exports = mongoose.model('CompanyProduct', companyProductSchema);

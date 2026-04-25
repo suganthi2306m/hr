@@ -18,6 +18,8 @@ import 'geo/live_tracking_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
+import '../models/check_active_result.dart';
+
 class AuthService {
   static const String _kAuthBaseUrl = 'auth_base_url';
   // Use the constant from config
@@ -668,9 +670,15 @@ class AuthService {
   /// Returns true if user is still active, false if deactivated (200 + active: false), null on
   /// network/error or 401 (no logout — 401 is expired/invalid token, not deactivation).
   Future<bool?> checkUserActive() async {
+    final r = await checkUserActiveDetailed();
+    return r.active;
+  }
+
+  /// Same as [checkUserActive] but includes optional [reason] / [message] when `active` is false.
+  Future<CheckActiveResult> checkUserActiveDetailed() async {
     final prefs = await SharedPreferences.getInstance();
     String? token = prefs.getString('token');
-    if (token == null || token.isEmpty) return null;
+    if (token == null || token.isEmpty) return CheckActiveResult(active: null);
     if (token.startsWith('"') || token.endsWith('"'))
       token = token.replaceAll('"', '');
     try {
@@ -679,14 +687,19 @@ class AuthService {
         '/auth/check-active',
       );
       final data = response.data;
-      if (data == null) return null;
-      return data['active'] == true;
+      if (data == null) return CheckActiveResult(active: null);
+      final active = data['active'] == true;
+      return CheckActiveResult(
+        active: active,
+        reason: data['reason']?.toString(),
+        message: data['message']?.toString(),
+      );
     } on DioException catch (_) {
       // Includes 401 (expired/invalid JWT). Do not map to deactivated — that would clear prefs
       // and force login on every resume after token issues.
-      return null;
+      return CheckActiveResult(active: null);
     } catch (_) {
-      return null;
+      return CheckActiveResult(active: null);
     }
   }
 

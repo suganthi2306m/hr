@@ -10,6 +10,7 @@ import 'package:timezone/timezone.dart' as tz;
 import '../models/attendance_alarm_settings.dart';
 import '../models/attendance_record.dart';
 import '../utils/date_display_util.dart';
+import '../utils/weekly_off_policy.dart';
 import 'alarm_service.dart';
 import 'attendance_alarm_log.dart';
 import 'attendance_alarm_punch_state.dart';
@@ -267,7 +268,7 @@ class AttendanceAlarmScheduler {
 
     final bundle = await _loadShiftBundle(att);
     attendanceAlarmLog(
-      'shiftMeta weekOff=${bundle.weekOff.join(",")} holidayKeys=${bundle.holidays.length}',
+      'shiftMeta weekOffHasRules=${bundle.weekOffPolicy.hasRules} holidayKeys=${bundle.holidays.length}',
     );
 
     await cancelScheduled(plugin);
@@ -417,7 +418,7 @@ class AttendanceAlarmScheduler {
     return DateTime(d.year, d.month, d.day, h, m);
   }
 
-  static Future<({Set<int> weekOff, Map<String, String> holidays})> _loadShiftBundle(
+  static Future<({WeeklyOffPolicy weekOffPolicy, Map<String, String> holidays})> _loadShiftBundle(
     AttendanceService att,
   ) async {
     final n = DateTime.now();
@@ -426,16 +427,7 @@ class AttendanceAlarmScheduler {
     final meta1 = await att.fetchShiftMeta(month: m1) ?? {};
     final meta2 = await att.fetchShiftMeta(month: m2) ?? {};
 
-    Set<int> parseWeek(Map<String, dynamic> meta) {
-      final list = (meta['weekOffWeekdays'] as List?) ?? const [];
-      final set = list
-          .map((e) => int.tryParse(e.toString()))
-          .whereType<int>()
-          .toSet();
-      return set.isEmpty ? <int>{6, 7} : set;
-    }
-
-    final weekOff = parseWeek(meta1);
+    final weekOffPolicy = WeeklyOffPolicy.fromShiftMeta(meta1);
 
     final holidays = <String, String>{};
     void addH(Map<String, dynamic> meta) {
@@ -450,7 +442,7 @@ class AttendanceAlarmScheduler {
 
     addH(meta1);
     addH(meta2);
-    return (weekOff: weekOff, holidays: holidays);
+    return (weekOffPolicy: weekOffPolicy, holidays: holidays);
   }
 
   static String _ymd(DateTime d) {
@@ -462,13 +454,13 @@ class AttendanceAlarmScheduler {
   static String? _skipReason(
     DateTime day,
     List<LeaveRequestRecord> leaves,
-    ({Set<int> weekOff, Map<String, String> holidays}) bundle,
+    ({WeeklyOffPolicy weekOffPolicy, Map<String, String> holidays}) bundle,
   ) {
     final d = DateDisplayUtil.dateOnlyLocal(day);
     final hol = bundle.holidays[_ymd(d)];
     if (hol != null) return 'holiday:$hol';
-    if (bundle.weekOff.contains(d.weekday)) {
-      return 'weekOff weekday=${d.weekday}';
+    if (bundle.weekOffPolicy.isWeeklyOff(d)) {
+      return 'weekOff';
     }
     for (final l in leaves) {
       if (l.status.toUpperCase() != 'APPROVED') continue;

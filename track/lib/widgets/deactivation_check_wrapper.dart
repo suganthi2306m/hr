@@ -121,8 +121,23 @@ class _DeactivationCheckWrapperState extends State<DeactivationCheckWrapper>
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getString('token') == null || prefs.getString('token')!.isEmpty)
       return;
-    final active = await AuthService().checkUserActive();
-    if (active == false && mounted) {
+    final result = await AuthService().checkUserActiveDetailed();
+    if (result.shouldLogout && mounted) {
+      if (result.hasUserFacingMessage) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Access ended'),
+            content: Text(result.message!.trim()),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
       _timer?.cancel();
       _timer = null;
       context.read<AuthBloc>().add(AuthLogoutRequested());

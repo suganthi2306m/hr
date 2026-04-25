@@ -358,9 +358,17 @@ function parseHolidayDateRaw(raw) {
   if (raw instanceof Date && Number.isFinite(raw.getTime())) return raw;
   const s = String(raw).trim();
   if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (m) {
+    const y = Number(m[1]);
+    const mo = Number(m[2]) - 1;
+    const da = Number(m[3]);
+    const d = new Date(y, mo, da, 0, 0, 0, 0);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
   const d = new Date(s);
   if (!Number.isFinite(d.getTime())) return null;
-  return d;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 }
 
 function ymdFromDate(d) {
@@ -386,20 +394,18 @@ function monthBoundsFromYmd(ymd) {
 function extractCompanyHolidaysForMonth(company, user, monthYmd) {
   const bounds = monthBoundsFromYmd(monthYmd);
   if (!bounds) return [];
-  const raw =
-    company?.settings?.business?.holidays ||
-    company?.settings?.attendance?.holidays ||
-    [];
-  if (!Array.isArray(raw) || raw.length === 0) return [];
-
   const userBranchId = toTrimmedString(user?.branchId);
+  const sources = [];
+  if (Array.isArray(company?.orgSetup?.holidays)) sources.push(...company.orgSetup.holidays);
+  if (Array.isArray(company?.settings?.business?.holidays)) sources.push(...company.settings.business.holidays);
+  if (Array.isArray(company?.settings?.attendance?.holidays)) sources.push(...company.settings.attendance.holidays);
+  if (sources.length === 0) return [];
+
   const out = [];
-  for (const item of raw) {
+  const seenYmd = new Set();
+
+  for (const item of sources) {
     if (!item || typeof item !== 'object') continue;
-    const dateRaw = item.date ?? item.holidayDate ?? item.startDate ?? item.fromDate;
-    const date = parseHolidayDateRaw(dateRaw);
-    if (!date) continue;
-    if (date < bounds.start || date > bounds.end) continue;
 
     const branches = Array.isArray(item.branchIds)
       ? item.branchIds
@@ -410,10 +416,27 @@ function extractCompanyHolidaysForMonth(company, user, monthYmd) {
       const allowed = branches.some((b) => toTrimmedString(b?._id ?? b?.id ?? b) === userBranchId);
       if (!allowed) continue;
     }
-    out.push({
-      ymd: ymdFromDate(date),
-      name: toTrimmedString(item.name || item.title || 'Holiday'),
-    });
+
+    const name = toTrimmedString(item.name || item.title || 'Holiday');
+    const startD = parseHolidayDateRaw(item.startDate ?? item.date ?? item.holidayDate ?? item.fromDate);
+    if (!startD) continue;
+    const endD = parseHolidayDateRaw(item.endDate ?? item.startDate ?? item.date) || startD;
+    const startClip = startD < bounds.start ? bounds.start : startD;
+    const endClip = endD > bounds.end ? bounds.end : endD < startD ? startD : endD;
+    if (startClip > bounds.end || endClip < bounds.start) continue;
+
+    const cur = new Date(startClip.getFullYear(), startClip.getMonth(), startClip.getDate(), 0, 0, 0, 0);
+    const endT = new Date(endClip.getFullYear(), endClip.getMonth(), endClip.getDate(), 0, 0, 0, 0).getTime();
+    while (cur.getTime() <= endT) {
+      if (cur >= bounds.start && cur <= bounds.end) {
+        const ymd = ymdFromDate(cur);
+        if (!seenYmd.has(ymd)) {
+          seenYmd.add(ymd);
+          out.push({ ymd, name });
+        }
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
   }
   return out;
 }
@@ -991,6 +1014,72 @@ function mapWeeklyDayToDartWeekday(day) {
   return n === 0 ? 7 : n;
 }
 
+const WEEKLY_OFF_DAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function emptyWeeklyOffRule() {
+  return { all: false, first: false, second: false, third: false, fourth: false, fifth: false };
+}
+
+function normalizeWeeklyOffPolicyForMobile(raw) {
+  const out = {
+    name: '',
+    days: {
+      sunday: emptyWeeklyOffRule(),
+      monday: emptyWeeklyOffRule(),
+      tuesday: emptyWeeklyOffRule(),
+      wednesday: emptyWeeklyOffRule(),
+      thursday: emptyWeeklyOffRule(),
+      friday: emptyWeeklyOffRule(),
+      saturday: emptyWeeklyOffRule(),
+    },
+  };
+  if (!raw) return out;
+  if (typeof raw === 'string') {
+    const key = raw.trim().toLowerCase();
+    if (WEEKLY_OFF_DAY_KEYS.includes(key)) {
+      out.name = 'Weekly Off';
+      out.days[key] = { all: true, first: false, second: false, third: false, fourth: false, fifth: false };
+    }
+    return out;
+  }
+  if (typeof raw !== 'object') return out;
+  out.name = String(raw.name || '').trim();
+  const srcDays = raw.days && typeof raw.days === 'object' ? raw.days : {};
+  WEEKLY_OFF_DAY_KEYS.forEach((k) => {
+    const d = srcDays[k] && typeof srcDays[k] === 'object' ? srcDays[k] : {};
+    out.days[k] = {
+      all: Boolean(d.all),
+      first: Boolean(d.first),
+      second: Boolean(d.second),
+      third: Boolean(d.third),
+      fourth: Boolean(d.fourth),
+      fifth: Boolean(d.fifth),
+    };
+  });
+  return out;
+}
+
+function hasWeeklyOffRules(policy) {
+  const p = normalizeWeeklyOffPolicyForMobile(policy);
+  return WEEKLY_OFF_DAY_KEYS.some((k) => {
+    const d = p.days[k];
+    return d.all || d.first || d.second || d.third || d.fourth || d.fifth;
+  });
+}
+
+function dartWeekdaysWithAllDayRules(policy) {
+  const p = normalizeWeeklyOffPolicyForMobile(policy);
+  const out = [];
+  WEEKLY_OFF_DAY_KEYS.forEach((k, jsDow) => {
+    const rule = p.days[k];
+    if (rule && rule.all) {
+      const dartWd = jsDow === 0 ? 7 : jsDow;
+      out.push(dartWd);
+    }
+  });
+  return out;
+}
+
 exports.getShiftMeta = async (req, res) => {
   try {
     const user = req.user;
@@ -1004,10 +1093,24 @@ exports.getShiftMeta = async (req, res) => {
     const shifts = companyShiftList(company);
     const shift = findShiftById(shifts, userShiftId);
 
-    const weeklyHolidays = company?.settings?.business?.weeklyHolidays || [];
-    const weekOffWeekdays = weeklyHolidays
-      .map((h) => mapWeeklyDayToDartWeekday(h?.day))
-      .filter((d) => d != null);
+    const weeklyOffRaw = company?.orgSetup?.weeklyOff ?? null;
+    const weeklyOff = normalizeWeeklyOffPolicyForMobile(weeklyOffRaw);
+    let weekOffWeekdays;
+    if (hasWeeklyOffRules(weeklyOff)) {
+      weekOffWeekdays = dartWeekdaysWithAllDayRules(weeklyOff);
+      const fromLegacy = (company?.settings?.business?.weeklyHolidays || [])
+        .map((h) => mapWeeklyDayToDartWeekday(h?.day))
+        .filter((d) => d != null);
+      if (!weekOffWeekdays.length && fromLegacy.length) {
+        weekOffWeekdays = fromLegacy;
+      }
+    } else {
+      const weeklyHolidays = company?.settings?.business?.weeklyHolidays || [];
+      weekOffWeekdays = weeklyHolidays
+        .map((h) => mapWeeklyDayToDartWeekday(h?.day))
+        .filter((d) => d != null);
+    }
+
     const month = req.query?.month;
     const holidays = extractCompanyHolidaysForMonth(company, user, month);
 
@@ -1019,6 +1122,7 @@ exports.getShiftMeta = async (req, res) => {
         startTime: shift?.startTime || null,
         endTime: shift?.endTime || null,
         weekOffWeekdays,
+        weeklyOff,
         holidays,
       },
     });

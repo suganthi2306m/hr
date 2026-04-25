@@ -637,7 +637,51 @@ async function upsertCompany(req, res, next) {
   }
 }
 
+function buildProvisioningPartnerPayload(saLean) {
+  if (!saLean) return null;
+  const prof = saLean.superAdminOrgProfile && typeof saLean.superAdminOrgProfile === 'object' ? saLean.superAdminOrgProfile : {};
+  return {
+    accountName: saLean.name || '',
+    accountEmail: saLean.email || '',
+    profile: {
+      companyName: prof.companyName || '',
+      companyEmail: prof.companyEmail || '',
+      companyPhone: prof.companyPhone || '',
+      companyWebsiteUrl: prof.companyWebsiteUrl || '',
+      description: prof.description || '',
+      address: prof.address || '',
+      supportEmail: prof.supportEmail || '',
+      contactPersonName: prof.contactPersonName || '',
+      altPhone: prof.altPhone || '',
+    },
+  };
+}
+
+/** Tenant company: who provisioned them + public org/contact fields for "Our products" support. */
+async function getProvisioningPartnerContact(req, res, next) {
+  try {
+    const company = await Company.findOne({ adminId: req.admin._id }).select('createdBySuperAdminId').lean();
+    if (!company) {
+      return res.status(404).json({ message: 'Company not found.' });
+    }
+    let partner = null;
+    if (company.createdBySuperAdminId) {
+      partner = await Admin.findById(company.createdBySuperAdminId).select('name email role superAdminOrgProfile').lean();
+    }
+    if (!partner || !['superadmin', 'mainsuperadmin'].includes(partner.role)) {
+      partner = await Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 }).select('name email role superAdminOrgProfile').lean();
+    }
+    if (!partner) {
+      return res.json({ partner: null });
+    }
+    return res.json({ partner: buildProvisioningPartnerPayload(partner) });
+  } catch (e) {
+    return next(e);
+  }
+}
+
 module.exports = {
   getCompany,
   upsertCompany,
+  getProvisioningPartnerContact,
 };

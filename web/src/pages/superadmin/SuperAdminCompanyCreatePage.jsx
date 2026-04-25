@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import apiClient from '../../api/client';
+import apiClient, { getApiErrorMessage } from '../../api/client';
 import { CompanyPageHeader, Field, Section } from './superAdminCompanyUi';
 
 const emptyForm = () => ({
@@ -15,6 +15,7 @@ const emptyForm = () => ({
   ownerEmail: '',
   ownerPassword: '',
   generateLicense: true,
+  licenseIsTrial: false,
   licenseKey: '',
   companyIsActive: true,
 });
@@ -26,6 +27,8 @@ export default function SuperAdminCompanyCreatePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState(emptyForm);
+  /** When using an existing license: preview plan from GET /super/licenses/lookup */
+  const [licenseLookup, setLicenseLookup] = useState({ status: 'idle' });
 
   const loadPlans = useCallback(async () => {
     setLoadingPlans(true);
@@ -46,13 +49,48 @@ export default function SuperAdminCompanyCreatePage() {
     void loadPlans();
   }, [loadPlans]);
 
+  useEffect(() => {
+    if (form.generateLicense) {
+      setLicenseLookup({ status: 'idle' });
+      return undefined;
+    }
+    const key = String(form.licenseKey || '').trim();
+    if (!key || key.replace(/\s+/g, '').length < 8) {
+      setLicenseLookup({ status: 'idle' });
+      return undefined;
+    }
+    const t = window.setTimeout(async () => {
+      setLicenseLookup({ status: 'loading' });
+      try {
+        const { data } = await apiClient.get('/super/licenses/lookup', { params: { key } });
+        setLicenseLookup({
+          status: 'ok',
+          planName: data.planName || '—',
+          planCode: data.planCode || '',
+          maxUsers: data.maxUsers,
+          maxBranches: data.maxBranches,
+        });
+      } catch (e) {
+        setLicenseLookup({
+          status: 'error',
+          message: getApiErrorMessage(e, 'Could not verify license.'),
+        });
+      }
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [form.generateLicense, form.licenseKey]);
+
   const validate = () => {
     if (!String(form.name || '').trim()) return 'Company name is required.';
     const em = String(form.companyEmail || '').trim();
     if (!em) return 'Company email is required.';
     if (!em.includes('@')) return 'Enter a valid company email.';
     if (!String(form.phone || '').trim()) return 'Phone is required.';
-    if (plans.length > 0 && !String(form.planId || '').trim()) return 'Select a subscription plan.';
+    if (form.generateLicense && plans.length > 0 && !String(form.planId || '').trim()) return 'Select a subscription plan.';
+    if (form.generateLicense && form.licenseIsTrial) {
+      const p = plans.find((x) => String(x._id) === String(form.planId));
+      if (!p || !(Number(p.trialDays) > 0)) return 'This plan does not support trial.';
+    }
     if (!String(form.ownerName || '').trim()) return 'Tenant owner name is required.';
     const oe = String(form.ownerEmail || '').trim();
     if (!oe) return 'Tenant owner email is required.';
@@ -61,6 +99,20 @@ export default function SuperAdminCompanyCreatePage() {
     if (pw.length < 6) return 'Owner password must be at least 6 characters.';
     if (!form.generateLicense && !String(form.licenseKey || '').trim()) {
       return 'Enter an existing license key, or enable “Generate new license key”.';
+    }
+    if (!form.generateLicense) {
+      const raw = String(form.licenseKey || '').trim();
+      if (raw.replace(/\s+/g, '').length >= 8) {
+        if (licenseLookup.status === 'loading' || licenseLookup.status === 'idle') {
+          return 'Wait for the license to finish verifying, then try again.';
+        }
+        if (licenseLookup.status === 'error') {
+          return licenseLookup.message || 'Enter a valid unassigned license key.';
+        }
+        if (licenseLookup.status !== 'ok') {
+          return 'Enter a valid unassigned license key.';
+        }
+      }
     }
     const addr = String(form.address || '').trim();
     const city = String(form.city || '').trim();
@@ -83,14 +135,14 @@ export default function SuperAdminCompanyCreatePage() {
     try {
       await apiClient.post('/super/companies', {
         ...form,
-        planId: form.planId,
+        planId: form.generateLicense ? form.planId : '',
         generateLicense: form.generateLicense,
+        licenseIsTrial: form.generateLicense ? Boolean(form.licenseIsTrial) : false,
         licenseKey: form.generateLicense ? '' : String(form.licenseKey || '').trim(),
       });
       navigate('/super/companies');
     } catch (err) {
-      const m = err.response?.data?.message || 'Could not create company.';
-      setError(typeof m === 'string' ? m : 'Could not create company.');
+      setError(getApiErrorMessage(err, 'Could not create company.'));
     } finally {
       setSaving(false);
     }
@@ -111,15 +163,15 @@ export default function SuperAdminCompanyCreatePage() {
             <Link to="/super/companies" className="btn-secondary inline-flex items-center justify-center">
               Cancel
             </Link>
-            <button type="submit" className="btn-primary" disabled={saving || !plans.length}>
+            <button type="submit" className="btn-primary" disabled={saving || (form.generateLicense && !plans.length)}>
               {saving ? 'Creating…' : 'Create company'}
             </button>
           </>
         }
       />
 
-      {!plans.length ? (
-        <p className="alert-error text-sm">Create at least one subscription plan before adding a company.</p>
+      {!plans.length && form.generateLicense ? (
+        <p className="alert-error text-sm">Create at least one subscription plan before generating a new license for a company.</p>
       ) : null}
       {error ? <p className="alert-error">{error}</p> : null}
 
@@ -165,12 +217,12 @@ export default function SuperAdminCompanyCreatePage() {
       </Section>
 
       <Section title="Subscription">
-        <Field label="Plan" required className="sm:col-span-2 lg:col-span-3">
+        <Field label="Plan" required={form.generateLicense} className="sm:col-span-2 lg:col-span-3">
           <select
             className="form-select"
             value={form.planId}
             onChange={(ev) => setForm({ ...form, planId: ev.target.value })}
-            disabled={!plans.length}
+            disabled={!plans.length || !form.generateLicense}
           >
             {plans.map((p) => (
               <option key={p._id} value={p._id}>
@@ -178,6 +230,9 @@ export default function SuperAdminCompanyCreatePage() {
               </option>
             ))}
           </select>
+          {!form.generateLicense ? (
+            <p className="mt-1 text-xs text-slate-500">Plan is taken from the existing license you enter below.</p>
+          ) : null}
         </Field>
         <Field label="License key source" className="sm:col-span-2 lg:col-span-3">
           <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -198,8 +253,66 @@ export default function SuperAdminCompanyCreatePage() {
               value={form.licenseKey}
               onChange={(ev) => setForm({ ...form, licenseKey: ev.target.value })}
             />
+            {licenseLookup.status === 'loading' ? (
+              <p className="mt-2 text-xs text-slate-500">Checking license…</p>
+            ) : null}
+            {licenseLookup.status === 'ok' ? (
+              <p className="mt-2 text-sm text-slate-700">
+                This license is on the <span className="font-bold text-dark">{licenseLookup.planName}</span> plan
+                {licenseLookup.planCode ? (
+                  <span className="text-slate-500">
+                    {' '}
+                    ({licenseLookup.planCode})
+                  </span>
+                ) : null}
+                {licenseLookup.maxUsers != null && licenseLookup.maxBranches != null ? (
+                  <span className="text-slate-500">
+                    {' '}
+                    — {licenseLookup.maxUsers} users / {licenseLookup.maxBranches} branches
+                  </span>
+                ) : null}
+                .
+              </p>
+            ) : null}
+            {licenseLookup.status === 'error' ? (
+              <p className="mt-2 text-xs text-rose-700">{licenseLookup.message}</p>
+            ) : null}
           </Field>
-        ) : null}
+        ) : (
+          <Field label="New license type" className="sm:col-span-2 lg:col-span-3">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="form-checkbox"
+                checked={form.licenseIsTrial}
+                disabled={(() => {
+                  const p = plans.find((x) => String(x._id) === String(form.planId));
+                  return !p || !(Number(p.trialDays) > 0);
+                })()}
+                onChange={(ev) => setForm({ ...form, licenseIsTrial: ev.target.checked })}
+              />
+              Start on trial (uses plan trial days only; paid term uses plan duration)
+            </label>
+            {(() => {
+              const p = plans.find((x) => String(x._id) === String(form.planId));
+              if (!p) return null;
+              if (form.licenseIsTrial && Number(p.trialDays) > 0) {
+                return (
+                  <p className="mt-2 text-xs text-slate-600">
+                    Valid until is set from the plan: <span className="font-semibold text-dark">{p.trialDays}</span> calendar days from
+                    today.
+                  </p>
+                );
+              }
+              return (
+                <p className="mt-2 text-xs text-slate-600">
+                  Paid: validity defaults to <span className="font-semibold text-dark">{p.durationMonths || 12}</span> month(s) from
+                  today per plan duration.
+                </p>
+              );
+            })()}
+          </Field>
+        )}
         <Field label="Status" className="sm:col-span-2 lg:col-span-3">
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input

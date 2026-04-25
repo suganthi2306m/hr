@@ -15,6 +15,7 @@ import 'package:track/services/attendance_alarm_scheduler.dart';
 import 'package:track/services/attendance_service.dart';
 import 'package:track/services/auth_service.dart';
 import 'package:track/utils/date_display_util.dart';
+import 'package:track/utils/weekly_off_policy.dart';
 import 'package:track/widgets/app_feedback.dart';
 import 'package:track/navigation/main_shell_navigation.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
@@ -39,7 +40,7 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
   List<AttendanceRecord> _records = const [];
   List<LeaveRequestRecord> _leavesAll = const [];
   String? _shiftTimingLine;
-  Set<int> _weekOffWeekdays = <int>{6, 7};
+  WeeklyOffPolicy _weeklyOff = WeeklyOffPolicy.fallbackSatSun();
   Map<String, String> _holidaysByYmd = const {};
 
   /// Month key `yyyy-MM` → records (avoids refetch when switching months back and forth).
@@ -67,11 +68,6 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
       final raw = prefs.getString('user');
       if (raw == null || raw.isEmpty) {
         if (meta != null && mounted) {
-          final weekOff = (meta['weekOffWeekdays'] as List?)
-                  ?.map((e) => int.tryParse(e.toString()))
-                  .whereType<int>()
-                  .toSet() ??
-              <int>{6, 7};
           setState(() {
             final start = meta['startTime']?.toString();
             final end = meta['endTime']?.toString();
@@ -79,7 +75,7 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
                 (start != null && start.isNotEmpty && end != null && end.isNotEmpty)
                     ? '$start - $end'
                     : null;
-            _weekOffWeekdays = weekOff.isEmpty ? <int>{6, 7} : weekOff;
+            _weeklyOff = WeeklyOffPolicy.fromShiftMeta(meta);
             final holidaysRaw = (meta['holidays'] as List?) ?? const [];
             final holidays = <String, String>{};
             for (final h in holidaysRaw) {
@@ -116,12 +112,7 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
         } else {
           _shiftTimingLine = null;
         }
-        final weekOff = (meta?['weekOffWeekdays'] as List?)
-                ?.map((e) => int.tryParse(e.toString()))
-                .whereType<int>()
-                .toSet() ??
-            <int>{6, 7};
-        _weekOffWeekdays = weekOff.isEmpty ? <int>{6, 7} : weekOff;
+        _weeklyOff = WeeklyOffPolicy.fromShiftMeta(meta);
         final holidaysRaw = (meta?['holidays'] as List?) ?? const [];
         final holidays = <String, String>{};
         for (final h in holidaysRaw) {
@@ -277,18 +268,41 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
     return '$checkIn - $checkOut';
   }
 
+  bool _hasRealAttendance(AttendanceRecord? r) {
+    if (r == null) return false;
+    final st = r.status.toUpperCase();
+    if (st == 'PRESENT' || st == 'HALF_DAY' || st == 'PENDING') return true;
+    final ds = (r.dayStatus ?? '').toUpperCase();
+    if (ds == 'PRESENT' || ds == 'HALF_DAY' || ds == 'PENDING') return true;
+    if (r.durationMinutes > 0) return true;
+    if ((r.minutesWorked ?? 0) > 0) return true;
+    return false;
+  }
+
   String _rowStatus(DateTime day, AttendanceRecord? r, LeaveRequestRecord? leave) {
     final today = _d0(DateTime.now());
     final d = _d0(day);
-    if (d.isAfter(today)) return 'Upcoming';
     final holiday = _holidaysByYmd[_ymd(d)];
     if (holiday != null && holiday.isNotEmpty) return 'Holiday';
     if (leave != null) return 'Leave';
+
+    if (d.isAfter(today)) {
+      if (_weeklyOff.isWeeklyOff(d) && !_hasRealAttendance(r)) return 'Week Off';
+      return 'Upcoming';
+    }
+
     final dayStatus = (r?.dayStatus ?? r?.status ?? '').toUpperCase();
-    if (dayStatus == 'HOLIDAY') return 'Holiday';
+    if (dayStatus == 'HOLIDAY') {
+      if (_weeklyOff.isWeeklyOff(d) && !_hasRealAttendance(r)) return 'Week Off';
+      return 'Holiday';
+    }
     if (dayStatus == 'LEAVE') return 'Leave';
+
+    if (_weeklyOff.isWeeklyOff(d) && !_hasRealAttendance(r)) {
+      return 'Week Off';
+    }
+
     if (r == null) {
-      if (_weekOffWeekdays.contains(d.weekday)) return 'Week Off';
       if (d == today) return 'Not marked';
       return 'Absent';
     }
@@ -322,11 +336,11 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
           (r?.dayStatus ?? '').toUpperCase() == 'HOLIDAY') {
         continue;
       }
-      if (_weekOffWeekdays.contains(d.weekday)) {
+      if (leave != null) continue;
+      if (_weeklyOff.isWeeklyOff(day) && !_hasRealAttendance(r)) {
         weekOffDays++;
         continue;
       }
-      if (leave != null) continue;
       if (r == null) {
         absent++;
         continue;

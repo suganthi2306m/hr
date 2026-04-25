@@ -8,9 +8,14 @@ const SubscriptionPlan = require('../models/SubscriptionPlan');
 const License = require('../models/License');
 const PlatformSettings = require('../models/PlatformSettings');
 const PaymentTransaction = require('../models/PaymentTransaction');
-const { generateUniqueLicenseKey, addMonths } = require('../services/licenseKeyService');
+const CompanyProduct = require('../models/CompanyProduct');
+const { toItem: companyProductToItem } = require('./companyProductController');
+const { generateUniqueLicenseKey, addMonths, addDays } = require('../services/licenseKeyService');
 const { encryptSecret } = require('../services/fieldCrypto');
-const { getPaysharpConfig } = require('../services/platformGatewayConfig');
+const {
+  getPaysharpConfig,
+  resolveSubscriptionCatalogOwnerIdFromCompanyId,
+} = require('../services/platformGatewayConfig');
 const { fetchPaysharpUpiOrderStatus } = require('../services/paysharpService');
 const { applyCapturedSubscriptionPayment } = require('../services/subscriptionEntitlementService');
 const {
@@ -23,6 +28,42 @@ function asInt(v, fallback) {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
   return Math.floor(n);
+}
+
+/** Single-plan trial vs paid: trial uses plan.trialDays (days); paid uses plan.durationMonths (months). */
+function computeLicenseValidityFromPlan(plan, { isTrial, paidValidUntilOverride }) {
+  const validFrom = new Date();
+  if (!plan) {
+    const err = new Error('Plan is required.');
+    err.status = 400;
+    throw err;
+  }
+  if (isTrial) {
+    const td = Math.max(0, Math.floor(Number(plan.trialDays) || 0));
+    if (td <= 0) {
+      const err = new Error('This plan does not support trial.');
+      err.status = 400;
+      throw err;
+    }
+    return { validFrom, validUntil: addDays(validFrom, td), isTrial: true };
+  }
+  let validUntil;
+  if (paidValidUntilOverride) {
+    const d = new Date(paidValidUntilOverride);
+    if (!Number.isFinite(d.getTime())) {
+      validUntil = addMonths(validFrom, Math.max(1, Math.floor(Number(plan.durationMonths) || 12)));
+    } else {
+      validUntil = d;
+      if (validUntil.getTime() < validFrom.getTime()) {
+        const err = new Error('Valid until must be on or after today.');
+        err.status = 400;
+        throw err;
+      }
+    }
+  } else {
+    validUntil = addMonths(validFrom, Math.max(1, Math.floor(Number(plan.durationMonths) || 12)));
+  }
+  return { validFrom, validUntil, isTrial: false };
 }
 
 function isMainSuperAdmin(req) {
@@ -43,6 +84,53 @@ function canAccessPartnerResource(req, createdById) {
   return String(ownerId || '') === String(req.admin?._id || '');
 }
 
+const SUPER_ORG_PROFILE_KEYS = [
+  'companyName',
+  'companyEmail',
+  'companyPhone',
+  'companyWebsiteUrl',
+  'description',
+  'address',
+  'supportEmail',
+  'contactPersonName',
+  'altPhone',
+];
+
+function mergeSuperAdminOrgProfileFromBody(admin, body) {
+  if (!body || typeof body !== 'object') return;
+  admin.superAdminOrgProfile = admin.superAdminOrgProfile || {};
+  const p = admin.superAdminOrgProfile;
+  for (const k of SUPER_ORG_PROFILE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(body, k)) {
+      const raw = body[k];
+      const v = raw == null ? '' : String(raw).trim();
+      if (k === 'companyEmail' || k === 'supportEmail') {
+        p[k] = v.toLowerCase();
+      } else {
+        p[k] = v;
+      }
+    }
+  }
+  admin.markModified('superAdminOrgProfile');
+}
+
+async function patchMySuperAdminOrgProfile(req, res, next) {
+  try {
+    if (!['superadmin', 'mainsuperadmin'].includes(req.admin?.role)) {
+      return res.status(403).json({ message: 'Only platform super admins can update this profile.' });
+    }
+    const admin = await Admin.findById(req.admin._id);
+    if (!admin) return res.status(404).json({ message: 'Account not found.' });
+    mergeSuperAdminOrgProfileFromBody(admin, req.body);
+    await admin.save();
+    const lean = await Admin.findById(admin._id).select('-password').lean();
+    return res.json({ admin: lean });
+  } catch (e) {
+    return next(e);
+  }
+}
+
+/** Each logged-in super admin only lists their own plan catalog (`createdByAdminId`). Partner catalogs stay isolated; main super admin never sees partner rows here. */
 async function listPlans(req, res, next) {
   try {
     const activeOnly = String(req.query.active || '').toLowerCase() === '1' || String(req.query.active || '').toLowerCase() === 'true';
@@ -136,7 +224,12 @@ async function listLicenses(req, res, next) {
         { planName: new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
       ];
     }
-    const items = await License.find(q).populate('companyId', 'name email').populate('planId', 'name planCode').sort({ createdAt: -1 }).limit(500).lean();
+    const items = await License.find(q)
+      .populate('companyId', 'name email')
+      .populate('planId', 'name planCode trialDays durationMonths')
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
 
     const now = new Date();
     const mapped = items.map((row) => {
@@ -164,6 +257,31 @@ async function listLicenses(req, res, next) {
   }
 }
 
+/** Preview plan snapshot on an unassigned license (for company create UI). */
+async function lookupLicenseForCompanyForm(req, res, next) {
+  try {
+    const key = normalizeLicenseKey(req.query.key || '');
+    if (!key || key.length < 8) return res.status(400).json({ message: 'Enter a license key (at least 8 characters).' });
+    const lic = await License.findOne({ licenseKey: key })
+      .select('licenseKey planName planCode maxUsers maxBranches companyId createdByAdminId isTrial')
+      .lean();
+    if (!lic) return res.status(404).json({ message: 'License key not found.' });
+    if (lic.companyId) return res.status(400).json({ message: 'This license is already assigned to a company.' });
+    if (!isMainSuperAdmin(req) && String(lic.createdByAdminId || '') !== String(req.admin._id)) {
+      return res.status(403).json({ message: 'This license is not in your pool.' });
+    }
+    return res.json({
+      planName: lic.planName || '—',
+      planCode: lic.planCode || '',
+      maxUsers: lic.maxUsers,
+      maxBranches: lic.maxBranches,
+      isTrial: Boolean(lic.isTrial),
+    });
+  } catch (e) {
+    return next(e);
+  }
+}
+
 async function createLicense(req, res, next) {
   try {
     if (!isMainSuperAdmin(req) && req.admin?.maxLicenses != null) {
@@ -182,8 +300,20 @@ async function createLicense(req, res, next) {
     const isTrial = Boolean(req.body.isTrial);
     const notes = String(req.body.notes || '').trim();
 
-    let validUntil = req.body.validUntil ? new Date(req.body.validUntil) : addMonths(new Date(), plan.durationMonths);
-    if (!Number.isFinite(validUntil.getTime())) validUntil = addMonths(new Date(), plan.durationMonths);
+    if (isTrial && req.body.validUntil != null && String(req.body.validUntil).trim() !== '') {
+      return res.status(400).json({ message: 'Trial licenses do not accept a custom valid until date.' });
+    }
+    let validFrom;
+    let validUntil;
+    try {
+      ({ validFrom, validUntil } = computeLicenseValidityFromPlan(plan, {
+        isTrial,
+        paidValidUntilOverride: isTrial ? null : req.body.validUntil,
+      }));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ message: e.message });
+      throw e;
+    }
 
     const licenseKey =
       req.body.licenseKey && String(req.body.licenseKey).trim()
@@ -208,6 +338,7 @@ async function createLicense(req, res, next) {
       planName: plan.name,
       maxUsers,
       maxBranches,
+      validFrom,
       validUntil,
       status: companyId ? 'active' : 'unassigned',
       isTrial,
@@ -226,12 +357,15 @@ async function createLicense(req, res, next) {
           'subscription.maxUsers': maxUsers,
           'subscription.maxBranches': maxBranches,
           'subscription.expiresAt': validUntil,
+          'subscription.isTrial': isTrial,
           'subscription.isActive': true,
         },
       });
     }
 
-    const populated = await License.findById(row._id).populate('companyId', 'name email').populate('planId', 'name planCode');
+    const populated = await License.findById(row._id)
+      .populate('companyId', 'name email')
+      .populate('planId', 'name planCode trialDays durationMonths');
     return res.status(201).json({ item: populated });
   } catch (e) {
     return next(e);
@@ -250,6 +384,7 @@ async function syncCompanyFromLicenseDoc(companyId, lic) {
       'subscription.maxUsers': lic.maxUsers,
       'subscription.maxBranches': lic.maxBranches,
       'subscription.expiresAt': lic.validUntil,
+      'subscription.isTrial': Boolean(lic.isTrial),
     },
   });
 }
@@ -258,7 +393,10 @@ async function getLicense(req, res, next) {
   try {
     const id = req.params.id;
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ message: 'Invalid license id.' });
-    const item = await License.findById(id).populate('companyId', 'name email').populate('planId', 'name planCode priceInr').lean();
+    const item = await License.findById(id)
+      .populate('companyId', 'name email')
+      .populate('planId', 'name planCode priceInr trialDays durationMonths')
+      .lean();
     if (!item) return res.status(404).json({ message: 'License not found.' });
     if (!canAccessPartnerResource(req, item.createdByAdminId)) return res.status(403).json({ message: 'Access denied.' });
     const derivedStatus = licenseStatusFromRow(item, new Date());
@@ -284,7 +422,9 @@ async function patchLicense(req, res, next) {
           $set: { 'subscription.isActive': false },
         });
       }
-      const populated = await License.findById(lic._id).populate('companyId', 'name email').populate('planId', 'name planCode');
+      const populated = await License.findById(lic._id)
+        .populate('companyId', 'name email')
+        .populate('planId', 'name planCode trialDays durationMonths');
       return res.json({ item: populated });
     }
 
@@ -292,6 +432,7 @@ async function patchLicense(req, res, next) {
       lic.status = req.body.status;
     }
 
+    let planChanged = false;
     if (req.body.planId !== undefined && String(req.body.planId).trim() && mongoose.Types.ObjectId.isValid(String(req.body.planId))) {
       const plan = await SubscriptionPlan.findOne({ _id: req.body.planId, createdByAdminId: lic.createdByAdminId });
       if (!plan || plan.isActive === false) return res.status(400).json({ message: 'Plan not found or inactive.' });
@@ -302,15 +443,61 @@ async function patchLicense(req, res, next) {
         lic.maxUsers = plan.maxUsers;
         lic.maxBranches = plan.maxBranches;
       }
+      planChanged = true;
     }
     if (req.body.maxUsers != null) lic.maxUsers = Math.max(1, asInt(req.body.maxUsers, lic.maxUsers));
     if (req.body.maxBranches != null) lic.maxBranches = Math.max(1, asInt(req.body.maxBranches, lic.maxBranches));
-    if (req.body.validUntil !== undefined) {
-      const d = req.body.validUntil ? new Date(req.body.validUntil) : lic.validUntil;
-      if (Number.isFinite(d.getTime())) lic.validUntil = d;
+
+    const prevTrial = Boolean(lic.isTrial);
+    if (req.body.isTrial !== undefined) {
+      lic.isTrial = Boolean(req.body.isTrial);
     }
+    const trialFlagChanged = req.body.isTrial !== undefined && Boolean(req.body.isTrial) !== prevTrial;
+
+    if (req.body.validUntil !== undefined && lic.isTrial) {
+      return res.status(400).json({ message: 'Trial licenses cannot set a custom valid until date.' });
+    }
+
+    const plan = await SubscriptionPlan.findById(lic.planId);
+    if (!plan || plan.isActive === false) return res.status(400).json({ message: 'Plan not found or inactive.' });
+
+    const recomputeWindow = trialFlagChanged || planChanged;
+
+    if (lic.isTrial) {
+      if (recomputeWindow) {
+        try {
+          const w = computeLicenseValidityFromPlan(plan, { isTrial: true, paidValidUntilOverride: null });
+          lic.validFrom = w.validFrom;
+          lic.validUntil = w.validUntil;
+        } catch (e) {
+          lic.isTrial = prevTrial;
+          if (e.status) return res.status(e.status).json({ message: e.message });
+          throw e;
+        }
+      }
+    } else if (req.body.validUntil !== undefined) {
+      const d = req.body.validUntil ? new Date(req.body.validUntil) : lic.validUntil;
+      if (Number.isFinite(d.getTime())) {
+        const vfBase = lic.validFrom || lic.createdAt || null;
+        const vf = vfBase ? new Date(vfBase) : new Date(0);
+        if (d.getTime() < vf.getTime()) {
+          return res.status(400).json({ message: 'Valid until must be on or after valid from.' });
+        }
+        lic.validUntil = d;
+      }
+    } else if (recomputeWindow) {
+      try {
+        const w = computeLicenseValidityFromPlan(plan, { isTrial: false, paidValidUntilOverride: null });
+        lic.validFrom = w.validFrom;
+        lic.validUntil = w.validUntil;
+      } catch (e) {
+        lic.isTrial = prevTrial;
+        if (e.status) return res.status(e.status).json({ message: e.message });
+        throw e;
+      }
+    }
+
     if (req.body.notes !== undefined) lic.notes = String(req.body.notes || '').trim();
-    if (req.body.isTrial !== undefined) lic.isTrial = Boolean(req.body.isTrial);
 
     await lic.save();
 
@@ -318,7 +505,9 @@ async function patchLicense(req, res, next) {
       await syncCompanyFromLicenseDoc(lic.companyId, lic);
     }
 
-    const populated = await License.findById(lic._id).populate('companyId', 'name email').populate('planId', 'name planCode');
+    const populated = await License.findById(lic._id)
+      .populate('companyId', 'name email')
+      .populate('planId', 'name planCode trialDays durationMonths');
     return res.json({ item: populated });
   } catch (e) {
     return next(e);
@@ -511,8 +700,22 @@ async function createCompany(req, res, next) {
 
     let license = null;
     if (generateLicense) {
+      const licenseIsTrial = Boolean(req.body.licenseIsTrial);
+      let validFrom;
+      let validUntil;
+      let trialFlag;
+      try {
+        ({ validFrom, validUntil, isTrial: trialFlag } = computeLicenseValidityFromPlan(plan, {
+          isTrial: licenseIsTrial,
+          paidValidUntilOverride: null,
+        }));
+      } catch (e) {
+        await Company.findByIdAndDelete(company._id);
+        await Admin.findByIdAndDelete(owner._id);
+        if (e.status) return res.status(e.status).json({ message: e.message });
+        throw e;
+      }
       const licenseKey = await generateUniqueLicenseKey(plan);
-      const validUntil = addMonths(new Date(), plan.durationMonths);
       license = await License.create({
         licenseKey,
         companyId: company._id,
@@ -521,9 +724,10 @@ async function createCompany(req, res, next) {
         planName: plan.name,
         maxUsers: plan.maxUsers,
         maxBranches: plan.maxBranches,
+        validFrom,
         validUntil,
         status: 'active',
-        isTrial: false,
+        isTrial: trialFlag,
         notes: String(req.body.licenseNotes || '').trim(),
         createdByAdminId: req.admin._id,
       });
@@ -532,10 +736,11 @@ async function createCompany(req, res, next) {
           'subscription.licenseId': license._id,
           'subscription.licenseKey': license.licenseKey,
           'subscription.expiresAt': validUntil,
+          'subscription.isTrial': trialFlag,
         },
       });
     } else if (manualKey) {
-      license = await License.findOne({ licenseKey: manualKey });
+      license = manualLicenseDoc;
       if (!license) return res.status(400).json({ message: 'License key not found.' });
       if (license.companyId) return res.status(400).json({ message: 'This license is already assigned to a company.' });
       license.companyId = company._id;
@@ -551,6 +756,7 @@ async function createCompany(req, res, next) {
           'subscription.planId': license.planId,
           'subscription.planCode': license.planCode,
           'subscription.planName': license.planName,
+          'subscription.isTrial': Boolean(license.isTrial),
         },
       });
     }
@@ -635,27 +841,35 @@ async function getOrCreatePlatformSettings() {
   return doc;
 }
 
-function sanitizePlatformSettings(leanOrDoc) {
-  const raw = leanOrDoc && typeof leanOrDoc.toObject === 'function' ? leanOrDoc.toObject() : { ...leanOrDoc };
-  const em = raw.email || {};
-  const pay = raw.paysharp || {};
-  const pal = raw.paypal || {};
-  const rz = raw.razorpay || {};
+function adminPaysharpHasApiKeyStored(adminLean) {
+  const p = adminLean?.paymentIntegrations?.paysharp;
+  return Boolean(p && String(p.apiKey || '').trim());
+}
+
+function adminRazorpayHasKeysStored(adminLean) {
+  const r = adminLean?.paymentIntegrations?.razorpay;
+  return Boolean(r && String(r.keyId || '').trim() && String(r.keySecret || '').trim());
+}
+
+function adminPaypalHasSecretsStored(adminLean) {
+  const p = adminLean?.paymentIntegrations?.paypal;
+  return Boolean(p && String(p.clientId || '').trim() && String(p.clientSecret || '').trim());
+}
+
+/** Main super admin still sees legacy PlatformSettings gateways until they save keys on their admin profile. */
+function mergedPaymentGatewaySources(adminLean, platformLean, isMain) {
+  const pi = adminLean?.paymentIntegrations || {};
+  const pl = platformLean || {};
+  return {
+    paysharp: isMain && !adminPaysharpHasApiKeyStored(adminLean) ? pl.paysharp || {} : pi.paysharp || {},
+    paypal: isMain && !adminPaypalHasSecretsStored(adminLean) ? pl.paypal || {} : pi.paypal || {},
+    razorpay: isMain && !adminRazorpayHasKeysStored(adminLean) ? pl.razorpay || {} : pi.razorpay || {},
+  };
+}
+
+function sanitizeGatewayTriplet(pay, pal, rz) {
   const paysharpEnvToken = String(process.env.PAYSHARP_API_TOKEN || process.env.PAYSHARP_BEARER_TOKEN || '').trim();
   return {
-    _id: raw._id,
-    key: raw.key,
-    updatedAt: raw.updatedAt,
-    createdAt: raw.createdAt,
-    email: {
-      smtpHost: em.smtpHost || '',
-      smtpPort: em.smtpPort ?? 587,
-      useTls: em.useTls !== false,
-      smtpUser: em.smtpUser || '',
-      fromEmail: em.fromEmail || '',
-      fromName: em.fromName || '',
-      smtpPasswordSet: Boolean(em.smtpPassword),
-    },
     paysharp: {
       enabled: Boolean(pay.enabled),
       merchantId: pay.merchantId || '',
@@ -680,10 +894,110 @@ function sanitizePlatformSettings(leanOrDoc) {
   };
 }
 
+function emptyEmailIntegrationBlock() {
+  return {
+    smtpHost: '',
+    smtpPort: 587,
+    useTls: true,
+    smtpUser: '',
+    fromEmail: '',
+    fromName: '',
+    smtpPasswordSet: false,
+  };
+}
+
+async function buildIntegrationsPayload(req) {
+  const admin = await Admin.findById(req.admin._id).lean();
+  if (!admin) return null;
+  const platform = (await PlatformSettings.findOne({ key: 'default' }).lean()) || {};
+  const isMain = isMainSuperAdmin(req);
+  const merged = mergedPaymentGatewaySources(admin, platform, isMain);
+  let email = emptyEmailIntegrationBlock();
+  if (isMain && platform.email) {
+    const em = platform.email;
+    email = {
+      smtpHost: em.smtpHost || '',
+      smtpPort: em.smtpPort ?? 587,
+      useTls: em.useTls !== false,
+      smtpUser: em.smtpUser || '',
+      fromEmail: em.fromEmail || '',
+      fromName: em.fromName || '',
+      smtpPasswordSet: Boolean(em.smtpPassword),
+    };
+  }
+  const gw = sanitizeGatewayTriplet(merged.paysharp, merged.paypal, merged.razorpay);
+  return {
+    _id: admin._id,
+    key: 'default',
+    updatedAt: admin.updatedAt,
+    createdAt: admin.createdAt,
+    email,
+    ...gw,
+  };
+}
+
+function applyPaymentGatewayPatches(admin, { paysharp, paypal, razorpay }) {
+  admin.paymentIntegrations = admin.paymentIntegrations || {};
+  if (paysharp && typeof paysharp === 'object') {
+    admin.paymentIntegrations.paysharp = admin.paymentIntegrations.paysharp || {};
+    const docP = admin.paymentIntegrations.paysharp;
+    const p = paysharp;
+    if (p.enabled !== undefined) docP.enabled = Boolean(p.enabled);
+    if (p.merchantId !== undefined) docP.merchantId = String(p.merchantId || '').trim();
+    if (p.apiKey !== undefined && String(p.apiKey).trim()) docP.apiKey = encryptSecret(String(p.apiKey).trim());
+    if (p.webhookSecret !== undefined && String(p.webhookSecret).trim()) {
+      docP.webhookSecret = encryptSecret(String(p.webhookSecret).trim());
+    }
+    if (p.apiBaseUrl !== undefined) {
+      const trimmed = String(p.apiBaseUrl || '').trim().slice(0, 500);
+      if (trimmed) {
+        const chk = validatePaysharpApiBaseUrlInput(trimmed);
+        if (!chk.ok) {
+          const err = new Error(chk.message);
+          err.status = 400;
+          throw err;
+        }
+        docP.apiBaseUrl = chk.value;
+      } else {
+        docP.apiBaseUrl = '';
+      }
+    }
+    if (p.useSandbox !== undefined) docP.useSandbox = Boolean(p.useSandbox);
+  }
+  if (paypal && typeof paypal === 'object') {
+    admin.paymentIntegrations.paypal = admin.paymentIntegrations.paypal || {};
+    const docPal = admin.paymentIntegrations.paypal;
+    const p = paypal;
+    if (p.enabled !== undefined) docPal.enabled = Boolean(p.enabled);
+    if (p.clientId !== undefined) docPal.clientId = String(p.clientId || '').trim();
+    if (p.clientSecret !== undefined && String(p.clientSecret).trim()) {
+      docPal.clientSecret = encryptSecret(String(p.clientSecret).trim());
+    }
+    if (p.mode !== undefined && ['sandbox', 'live'].includes(String(p.mode))) {
+      docPal.mode = String(p.mode);
+    }
+  }
+  if (razorpay && typeof razorpay === 'object') {
+    admin.paymentIntegrations.razorpay = admin.paymentIntegrations.razorpay || {};
+    const docRz = admin.paymentIntegrations.razorpay;
+    const r = razorpay;
+    if (r.enabled !== undefined) docRz.enabled = Boolean(r.enabled);
+    if (r.keyId !== undefined) docRz.keyId = String(r.keyId || '').trim();
+    if (r.keySecret !== undefined && String(r.keySecret).trim()) {
+      docRz.keySecret = encryptSecret(String(r.keySecret).trim());
+    }
+    if (r.webhookSecret !== undefined && String(r.webhookSecret).trim()) {
+      docRz.webhookSecret = encryptSecret(String(r.webhookSecret).trim());
+    }
+  }
+  admin.markModified('paymentIntegrations');
+}
+
 async function getIntegrations(req, res, next) {
   try {
-    const doc = await getOrCreatePlatformSettings();
-    return res.json({ item: sanitizePlatformSettings(doc) });
+    const item = await buildIntegrationsPayload(req);
+    if (!item) return res.status(404).json({ message: 'Account not found.' });
+    return res.json({ item });
   } catch (e) {
     return next(e);
   }
@@ -691,10 +1005,13 @@ async function getIntegrations(req, res, next) {
 
 async function patchIntegrations(req, res, next) {
   try {
-    const doc = await getOrCreatePlatformSettings();
     const { email, paysharp, paypal, razorpay } = req.body || {};
+    if (email && typeof email === 'object' && !isMainSuperAdmin(req)) {
+      return res.status(403).json({ message: 'Only the main platform super admin can update platform email (SMTP).' });
+    }
 
-    if (email && typeof email === 'object') {
+    if (isMainSuperAdmin(req) && email && typeof email === 'object') {
+      const doc = await getOrCreatePlatformSettings();
       doc.email = doc.email || {};
       const e = email;
       if (e.smtpHost !== undefined) doc.email.smtpHost = String(e.smtpHost || '').trim();
@@ -706,59 +1023,28 @@ async function patchIntegrations(req, res, next) {
       if (e.smtpPassword !== undefined && String(e.smtpPassword).trim()) {
         doc.email.smtpPassword = encryptSecret(String(e.smtpPassword).trim());
       }
+      await doc.save();
     }
 
-    if (paysharp && typeof paysharp === 'object') {
-      doc.paysharp = doc.paysharp || {};
-      const p = paysharp;
-      if (p.enabled !== undefined) doc.paysharp.enabled = Boolean(p.enabled);
-      if (p.merchantId !== undefined) doc.paysharp.merchantId = String(p.merchantId || '').trim();
-      if (p.apiKey !== undefined && String(p.apiKey).trim()) doc.paysharp.apiKey = encryptSecret(String(p.apiKey).trim());
-      if (p.webhookSecret !== undefined && String(p.webhookSecret).trim()) {
-        doc.paysharp.webhookSecret = encryptSecret(String(p.webhookSecret).trim());
+    const hasGatewayPatch =
+      (paysharp && typeof paysharp === 'object') ||
+      (paypal && typeof paypal === 'object') ||
+      (razorpay && typeof razorpay === 'object');
+    if (hasGatewayPatch) {
+      const admin = await Admin.findById(req.admin._id);
+      if (!admin) return res.status(404).json({ message: 'Account not found.' });
+      try {
+        applyPaymentGatewayPatches(admin, { paysharp, paypal, razorpay });
+      } catch (err) {
+        const st = Number(err?.status) || 400;
+        return res.status(st).json({ message: String(err?.message || 'Invalid request') });
       }
-      if (p.apiBaseUrl !== undefined) {
-        const trimmed = String(p.apiBaseUrl || '').trim().slice(0, 500);
-        if (trimmed) {
-          const chk = validatePaysharpApiBaseUrlInput(trimmed);
-          if (!chk.ok) return res.status(400).json({ message: chk.message });
-          doc.paysharp.apiBaseUrl = chk.value;
-        } else {
-          doc.paysharp.apiBaseUrl = '';
-        }
-      }
-      if (p.useSandbox !== undefined) doc.paysharp.useSandbox = Boolean(p.useSandbox);
+      await admin.save();
     }
 
-    if (paypal && typeof paypal === 'object') {
-      doc.paypal = doc.paypal || {};
-      const p = paypal;
-      if (p.enabled !== undefined) doc.paypal.enabled = Boolean(p.enabled);
-      if (p.clientId !== undefined) doc.paypal.clientId = String(p.clientId || '').trim();
-      if (p.clientSecret !== undefined && String(p.clientSecret).trim()) {
-        doc.paypal.clientSecret = encryptSecret(String(p.clientSecret).trim());
-      }
-      if (p.mode !== undefined && ['sandbox', 'live'].includes(String(p.mode))) {
-        doc.paypal.mode = String(p.mode);
-      }
-    }
-
-    if (razorpay && typeof razorpay === 'object') {
-      doc.razorpay = doc.razorpay || {};
-      const r = razorpay;
-      if (r.enabled !== undefined) doc.razorpay.enabled = Boolean(r.enabled);
-      if (r.keyId !== undefined) doc.razorpay.keyId = String(r.keyId || '').trim();
-      if (r.keySecret !== undefined && String(r.keySecret).trim()) {
-        doc.razorpay.keySecret = encryptSecret(String(r.keySecret).trim());
-      }
-      if (r.webhookSecret !== undefined && String(r.webhookSecret).trim()) {
-        doc.razorpay.webhookSecret = encryptSecret(String(r.webhookSecret).trim());
-      }
-    }
-
-    await doc.save();
-    const fresh = await PlatformSettings.findById(doc._id).lean();
-    return res.json({ item: sanitizePlatformSettings(fresh) });
+    const item = await buildIntegrationsPayload(req);
+    if (!item) return res.status(404).json({ message: 'Account not found.' });
+    return res.json({ item });
   } catch (e) {
     return next(e);
   }
@@ -794,24 +1080,28 @@ async function listPayments(req, res, next) {
     else if (statusFilter === 'pending') match.status = { $in: ['created', 'pending'] };
 
     if (syncPaysharp) {
-      const paysharp = await getPaysharpConfig();
-      if (paysharp.enabled && paysharp.apiKey) {
-        const pendingRows = await PaymentTransaction.find({
-          ...match,
-          gateway: 'paysharp',
-          status: { $in: ['created', 'pending'] },
-        })
-          .sort({ createdAt: -1 })
-          .limit(100);
-        for (const row of pendingRows) {
-          try {
-            const refNo = String(row.gatewayPayload?.data?.paysharpReferenceNo || '').trim();
-            const s = await fetchPaysharpUpiOrderStatus({
-              apiKey: paysharp.apiKey,
-              useSandbox: paysharp.useSandbox,
-              orderId: row.gatewayOrderId,
-              paysharpReferenceNo: refNo,
-            });
+      const pendingRows = await PaymentTransaction.find({
+        ...match,
+        gateway: 'paysharp',
+        status: { $in: ['created', 'pending'] },
+      })
+        .sort({ createdAt: -1 })
+        .limit(100);
+      for (const row of pendingRows) {
+        try {
+          const billingAdminId =
+            row.billingAdminId || (await resolveSubscriptionCatalogOwnerIdFromCompanyId(row.companyId));
+          const paysharp = await getPaysharpConfig({ billingAdminId });
+          if (!paysharp.enabled || !paysharp.apiKey) {
+            continue;
+          }
+          const refNo = String(row.gatewayPayload?.data?.paysharpReferenceNo || '').trim();
+          const s = await fetchPaysharpUpiOrderStatus({
+            apiKey: paysharp.apiKey,
+            useSandbox: paysharp.useSandbox,
+            orderId: row.gatewayOrderId,
+            paysharpReferenceNo: refNo,
+          });
             row.gatewayPayload = {
               ...((row.gatewayPayload && typeof row.gatewayPayload === 'object' && row.gatewayPayload) || {}),
               statusCheck: s.raw,
@@ -845,9 +1135,8 @@ async function listPayments(req, res, next) {
               row.status = 'pending';
               await row.save();
             }
-          } catch {
-            // best-effort sync; keep current DB row if gateway status call fails
-          }
+        } catch {
+          // best-effort sync; keep current DB row if gateway status call fails
         }
       }
     }
@@ -1117,6 +1406,7 @@ async function getPartnerSuperAdminPortfolio(req, res, next) {
               licenseKey: lic.licenseKey,
               status: lic.status,
               derivedStatus: derived,
+              validFrom: lic.validFrom,
               validUntil: lic.validUntil,
               planName: lic.planName,
               planCode: lic.planCode,
@@ -1133,6 +1423,7 @@ async function getPartnerSuperAdminPortfolio(req, res, next) {
       licenseKey: row.licenseKey,
       status: row.status,
       derivedStatus: licenseStatusFromRow(row, now),
+      validFrom: row.validFrom,
       validUntil: row.validUntil,
       planName: row.planName,
       planCode: row.planCode,
@@ -1144,6 +1435,13 @@ async function getPartnerSuperAdminPortfolio(req, res, next) {
       companyEmail: row.companyId && row.companyId.email ? row.companyId.email : '',
     }));
 
+    const planDocs = await SubscriptionPlan.find({ createdByAdminId: id }).sort({ priceInr: 1, name: 1 }).limit(500).lean();
+
+    const productOr = [{ portfolioSuperAdminId: id }];
+    if (companyIds.length) productOr.push({ companyId: { $in: companyIds } });
+    const productDocs = await CompanyProduct.find({ $or: productOr }).sort({ updatedAt: -1 }).limit(500).lean();
+    const productRows = productDocs.map((p) => companyProductToItem(p));
+
     return res.json({
       superAdmin: partner,
       summary: {
@@ -1151,9 +1449,13 @@ async function getPartnerSuperAdminPortfolio(req, res, next) {
         licensesIssued: allLicenses.length,
         totalUsers,
         totalBranches,
+        plans: planDocs.length,
+        products: productRows.length,
       },
       companies: companyRows,
       licenses: licenseRows,
+      plans: planDocs,
+      products: productRows,
     });
   } catch (e) {
     return next(e);
@@ -1189,6 +1491,9 @@ async function patchSuperAdmin(req, res, next) {
     if (req.body.password !== undefined && String(req.body.password).trim().length >= 6) {
       admin.password = String(req.body.password).trim();
     }
+    if (req.body.superAdminOrgProfile !== undefined && req.body.superAdminOrgProfile && typeof req.body.superAdminOrgProfile === 'object') {
+      mergeSuperAdminOrgProfileFromBody(admin, req.body.superAdminOrgProfile);
+    }
     await admin.save();
     const lean = await Admin.findById(admin._id).select('-password').lean();
     return res.json({ item: lean });
@@ -1202,6 +1507,7 @@ module.exports = {
   createPlan,
   updatePlan,
   listLicenses,
+  lookupLicenseForCompanyForm,
   getLicense,
   createLicense,
   patchLicense,
@@ -1217,4 +1523,5 @@ module.exports = {
   createSuperAdmin,
   getPartnerSuperAdminPortfolio,
   patchSuperAdmin,
+  patchMySuperAdminOrgProfile,
 };

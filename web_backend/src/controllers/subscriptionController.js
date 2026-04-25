@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const Admin = require('../models/Admin');
 const Company = require('../models/Company');
 const User = require('../models/User');
 const SubscriptionPlan = require('../models/SubscriptionPlan');
@@ -10,20 +9,17 @@ const {
   fetchPaysharpUpiOrderStatus,
   paysharpDebugLogEnabled,
 } = require('../services/paysharpService');
-const { getRazorpayConfig, getPaysharpConfig } = require('../services/platformGatewayConfig');
+const {
+  getRazorpayConfig,
+  getPaysharpConfig,
+  resolveSubscriptionCatalogOwnerId,
+  resolveSubscriptionCatalogOwnerIdFromCompanyId,
+} = require('../services/platformGatewayConfig');
 const { applyCapturedSubscriptionPayment } = require('../services/subscriptionEntitlementService');
 
 async function getCompanyIdForAdmin(adminId) {
   const company = await Company.findOne({ adminId }).select('_id');
   return company?._id || null;
-}
-
-/** Which super-admin catalog applies to billing (partner, or main for self-serve companies). */
-async function resolveSubscriptionCatalogOwnerId(company) {
-  if (!company) return null;
-  if (company.createdBySuperAdminId) return company.createdBySuperAdminId;
-  const main = await Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 }).select('_id').lean();
-  return main?._id || null;
 }
 
 async function assertPlanInCompanyCatalog(plan, company) {
@@ -33,6 +29,16 @@ async function assertPlanInCompanyCatalog(plan, company) {
     err.status = 400;
     throw err;
   }
+}
+
+async function findActivePlanInCompanyCatalog(planId, company) {
+  const catalogOwnerId = await resolveSubscriptionCatalogOwnerId(company);
+  if (!catalogOwnerId || !mongoose.Types.ObjectId.isValid(String(planId))) return null;
+  return SubscriptionPlan.findOne({
+    _id: planId,
+    isActive: true,
+    createdByAdminId: catalogOwnerId,
+  }).lean();
 }
 
 function computeAmountPaise(plan, durationMonths) {
@@ -142,6 +148,7 @@ async function getCurrent(req, res, next) {
         expiresAt,
         daysLeft,
         isActive: sub.isActive !== false,
+        isTrial: Boolean(sub.isTrial),
         licenseKey: sub.licenseKey || '',
       },
       usage: { staffCount, branchCount },
@@ -195,7 +202,9 @@ async function refreshMyPaymentStatus(req, res, next) {
     if (pay.status === 'captured' || pay.status === 'failed') return res.json({ item: pay });
 
     if (pay.gateway === 'paysharp') {
-      const paysharp = await getPaysharpConfig();
+      const billingAdminId =
+        pay.billingAdminId || (await resolveSubscriptionCatalogOwnerIdFromCompanyId(companyId));
+      const paysharp = await getPaysharpConfig({ billingAdminId });
       if (!paysharp.enabled || !paysharp.apiKey) {
         return res.status(400).json({ message: 'Paysharp is not configured for status checks.' });
       }
@@ -309,26 +318,25 @@ async function initiatePaysharp(req, res, next) {
     const planId = String(req.body.planId || '').trim();
     const durationMonths = Number(req.body.durationMonths);
     if (!mongoose.Types.ObjectId.isValid(planId)) return res.status(400).json({ message: 'Invalid plan id.' });
-    const plan = await SubscriptionPlan.findOne({ _id: planId, isActive: true });
-    if (!plan) return res.status(400).json({ message: 'Plan not found.' });
 
     const company = await Company.findById(companyId).lean();
     if (!company) return res.status(404).json({ message: 'Company not found.' });
-    try {
-      await assertPlanInCompanyCatalog(plan, company);
-    } catch (err) {
-      if (err.status) return res.status(err.status).json({ message: err.message });
-      throw err;
+    const plan = await findActivePlanInCompanyCatalog(planId, company);
+    if (!plan) {
+      return res.status(400).json({ message: 'Plan not found or not available for your organization.' });
     }
 
+    const billingAdminId = await resolveSubscriptionCatalogOwnerId(company);
     const { amountPaise, dm } = computeAmountPaise(plan, durationMonths);
     let gatewayAmount = amountPaise;
     if (gatewayAmount > 0 && gatewayAmount < 1000) gatewayAmount = 1000;
 
-    const paysharp = await getPaysharpConfig();
+    const paysharp = await getPaysharpConfig({ billingAdminId });
     const mockCheckout = String(process.env.PAYMENT_DEV_MOCK_CHECKOUT || '') === '1';
     if (!mockCheckout) {
-      if (!paysharp.enabled) return res.status(400).json({ message: 'Paysharp is not enabled in platform settings.' });
+      if (!paysharp.enabled) {
+        return res.status(400).json({ message: 'Paysharp is not enabled for your billing account (super admin integrations).' });
+      }
       if (!paysharp.apiKey) return res.status(400).json({ message: 'Paysharp API token is not configured.' });
       if (!String(paysharp.apiBaseUrl || '').trim()) {
         return res.status(400).json({
@@ -374,6 +382,7 @@ async function initiatePaysharp(req, res, next) {
       durationMonths: dm,
       licenseId: company.subscription?.licenseId || null,
       initiatedBy: req.admin._id,
+      billingAdminId,
       gateway: 'paysharp',
       method: 'checkout',
       status: 'created',
@@ -406,7 +415,7 @@ async function initiatePaysharp(req, res, next) {
         pay.externalPaymentId = ext;
       }
       await pay.save();
-      const rz = await getRazorpayConfig();
+      const rz = await getRazorpayConfig({ billingAdminId });
       const razorpayAvailable = Boolean(rz.keyId && rz.keySecret);
       const paysharpAvailable = true;
       const payload = buildCheckoutInitiateJson({
@@ -449,19 +458,16 @@ async function initiateRazorpay(req, res, next) {
     const planId = String(req.body.planId || '').trim();
     const durationMonths = Number(req.body.durationMonths);
     if (!mongoose.Types.ObjectId.isValid(planId)) return res.status(400).json({ message: 'Invalid plan id.' });
-    const plan = await SubscriptionPlan.findOne({ _id: planId, isActive: true });
-    if (!plan) return res.status(400).json({ message: 'Plan not found.' });
 
     const company = await Company.findById(companyId).lean();
     if (!company) return res.status(404).json({ message: 'Company not found.' });
-    try {
-      await assertPlanInCompanyCatalog(plan, company);
-    } catch (err) {
-      if (err.status) return res.status(err.status).json({ message: err.message });
-      throw err;
+    const plan = await findActivePlanInCompanyCatalog(planId, company);
+    if (!plan) {
+      return res.status(400).json({ message: 'Plan not found or not available for your organization.' });
     }
 
-    const rz = await getRazorpayConfig();
+    const billingAdminId = await resolveSubscriptionCatalogOwnerId(company);
+    const rz = await getRazorpayConfig({ billingAdminId });
     if (!rz.keyId || !rz.keySecret) {
       return res.status(400).json({ message: 'Razorpay is not configured (env or Super Admin → Integrations).' });
     }
@@ -480,6 +486,7 @@ async function initiateRazorpay(req, res, next) {
       durationMonths: dm,
       licenseId: company.subscription?.licenseId || null,
       initiatedBy: req.admin._id,
+      billingAdminId,
       gateway: 'razorpay',
       method: 'payment_link',
       status: 'created',
@@ -507,7 +514,7 @@ async function initiateRazorpay(req, res, next) {
       pay.externalPaymentId = result.id;
       pay.gatewayPayload = { short_url: result.short_url };
       await pay.save();
-      const paysharp = await getPaysharpConfig();
+      const paysharp = await getPaysharpConfig({ billingAdminId });
       const paysharpAvailable = Boolean(
         paysharp.enabled && paysharp.apiKey && String(paysharp.apiBaseUrl || '').trim(),
       );

@@ -1,40 +1,100 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
-import apiClient, { getApiErrorMessage } from '../api/client';
+import apiClient, { API_BASE_URL, getApiErrorMessage } from '../api/client';
 import LocationLoadingIndicator from '../components/common/LocationLoadingIndicator';
 import SlideOverPanel from '../components/common/SlideOverPanel';
+import PartnerSupportDetails from '../components/partner/PartnerSupportDetails';
 
-function emptyForm() {
-  return {
-    name: '',
-    shortDescription: '',
-    fullDescription: '',
-    bannerImage: '',
-    imagesText: '',
-    price: '',
-    offerTag: '',
-    showInApp: true,
-    highlightProduct: false,
-    showOnHomeBanner: false,
-    status: 'active',
-    ctaLabel: 'Contact Us',
-    ctaType: 'none',
-    ctaValue: '',
-  };
+function resolveProductMediaUrl(path) {
+  if (!path || typeof path !== 'string') return '';
+  const p = path.trim();
+  if (!p) return '';
+  if (/^https?:\/\//i.test(p) || p.startsWith('data:')) return p;
+  const base = String(API_BASE_URL || '').replace(/\/api\/?$/i, '');
+  if (!base) return p;
+  return `${base}${p.startsWith('/') ? p : `/${p}`}`;
 }
 
-function Toggle({ checked, onChange, label, disabled }) {
+function openExternal(url) {
+  if (!url) return;
+  const u = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  window.open(u, '_blank', 'noopener,noreferrer');
+}
+
+/** Returns 11-char YouTube video id or null. */
+function parseYoutubeVideoId(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  let href = s;
+  if (!/^https?:\/\//i.test(href)) href = `https://${href}`;
+  let url;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+  if (host === 'youtu.be') {
+    const id = url.pathname.split('/').filter(Boolean)[0];
+    return id && /^[\w-]{6,}$/.test(id) ? id : null;
+  }
+  if (host === 'm.youtube.com' || host === 'youtube.com' || host.endsWith('.youtube.com')) {
+    if (url.pathname.startsWith('/embed/')) {
+      const id = url.pathname.slice(7).split('/')[0];
+      return id && /^[\w-]{6,}$/.test(id) ? id : null;
+    }
+    if (url.pathname.startsWith('/shorts/')) {
+      const id = url.pathname.slice(8).split('/')[0];
+      return id && /^[\w-]{6,}$/.test(id) ? id : null;
+    }
+    const v = url.searchParams.get('v');
+    if (v && /^[\w-]{6,}$/.test(v)) return v;
+  }
+  return null;
+}
+
+function isDirectVideoFileUrl(url) {
+  return /\.(mp4|webm|ogg|m3u8)(\?|#|$)/i.test(String(url || ''));
+}
+
+function ProductInlineVideo({ rawUrl }) {
+  const resolved = resolveProductMediaUrl(rawUrl);
+  if (!resolved) return null;
+  const yt = parseYoutubeVideoId(resolved);
+  if (yt) {
+    const src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(yt)}?rel=0`;
+    return (
+      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-black shadow-inner">
+        <iframe
+          className="absolute inset-0 h-full w-full border-0"
+          src={src}
+          title="Product video"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+          loading="lazy"
+          referrerPolicy="strict-origin-when-cross-origin"
+        />
+      </div>
+    );
+  }
+  if (isDirectVideoFileUrl(resolved)) {
+    return (
+      <div className="overflow-hidden rounded-xl bg-black shadow-inner">
+        <video className="w-full max-h-[50vh]" controls playsInline preload="metadata" src={resolved} />
+      </div>
+    );
+  }
   return (
-    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-dark">
-      <input
-        type="checkbox"
-        className="h-4 w-4 rounded border-neutral-300 text-primary focus:ring-primary"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      {label}
-    </label>
+    <div className="space-y-2">
+      <p className="text-xs text-slate-600">This link cannot be embedded here. Open it in a new tab to watch.</p>
+      <button
+        type="button"
+        onClick={() => openExternal(resolved)}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-bold text-dark shadow-sm transition hover:brightness-95"
+      >
+        <span aria-hidden>▶</span> Open video
+      </button>
+    </div>
   );
 }
 
@@ -42,10 +102,11 @@ export default function OurProductsPage() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [editingId, setEditingId] = useState('');
-  const [form, setForm] = useState(emptyForm);
+  const [selected, setSelected] = useState(null);
+  const [contactOpen, setContactOpen] = useState(false);
+  const [partner, setPartner] = useState(null);
+  const [contactLoading, setContactLoading] = useState(false);
+  const [contactError, setContactError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,102 +126,33 @@ export default function OurProductsPage() {
     load();
   }, [load]);
 
-  const openCreate = () => {
-    setEditingId('');
-    setForm(emptyForm());
-    setPanelOpen(true);
-  };
-
-  const openEdit = (row) => {
-    setEditingId(String(row.id));
-    setForm({
-      name: row.name || '',
-      shortDescription: row.shortDescription || '',
-      fullDescription: row.fullDescription || '',
-      bannerImage: row.bannerImage || '',
-      imagesText: (Array.isArray(row.images) ? row.images : []).join('\n'),
-      price: row.price != null && row.price !== '' ? String(row.price) : '',
-      offerTag: row.offerTag || '',
-      showInApp: Boolean(row.showInApp),
-      highlightProduct: Boolean(row.highlightProduct),
-      showOnHomeBanner: Boolean(row.showOnHomeBanner),
-      status: row.status === 'inactive' ? 'inactive' : 'active',
-      ctaLabel: row.ctaLabel || 'Contact Us',
-      ctaType: row.ctaType || 'none',
-      ctaValue: row.ctaValue || '',
-    });
-    setPanelOpen(true);
-  };
-
-  const persist = async () => {
-    const name = form.name.trim();
-    if (!name) {
-      setError('Product name is required.');
-      return;
-    }
-    setSaving(true);
-    setError('');
+  const openPartnerContact = useCallback(async () => {
+    setContactOpen(true);
+    setContactLoading(true);
+    setContactError('');
+    setPartner(null);
     try {
-      const payload = {
-        name,
-        shortDescription: form.shortDescription.trim(),
-        fullDescription: form.fullDescription.trim(),
-        bannerImage: form.bannerImage.trim(),
-        imagesText: form.imagesText,
-        price: form.price.trim() === '' ? null : form.price,
-        offerTag: form.offerTag.trim(),
-        showInApp: form.showInApp,
-        highlightProduct: form.highlightProduct,
-        showOnHomeBanner: form.showOnHomeBanner,
-        status: form.status,
-        ctaLabel: form.ctaLabel.trim() || 'Contact Us',
-        ctaType: form.ctaType,
-        ctaValue: form.ctaValue.trim(),
-      };
-      if (editingId) {
-        await apiClient.put(`/company-products/${editingId}`, payload);
-      } else {
-        await apiClient.post('/company-products', payload);
-      }
-      setPanelOpen(false);
-      setEditingId('');
-      await load();
+      const { data } = await apiClient.get('/company/provisioning-partner');
+      setPartner(data?.partner || null);
     } catch (e) {
-      setError(getApiErrorMessage(e, 'Could not save product.'));
+      setPartner(null);
+      setContactError(getApiErrorMessage(e, 'Could not load partner contact.'));
     } finally {
-      setSaving(false);
+      setContactLoading(false);
     }
-  };
-
-  const remove = async (id) => {
-    if (!window.confirm('Delete this product? This cannot be undone.')) return;
-    setError('');
-    try {
-      await apiClient.delete(`/company-products/${id}`);
-      await load();
-    } catch (e) {
-      setError(getApiErrorMessage(e, 'Could not delete product.'));
-    }
-  };
+  }, []);
 
   const rows = useMemo(() => items.slice(), [items]);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-black text-dark">Our Products</h2>
-          <p className="mt-1 max-w-2xl text-sm text-slate-600">
-            Advertise products and offers to your team in the mobile app. Use image URLs (https) for banners and
-            galleries.
-          </p>
-        </div>
+      <div className="flex justify-end">
         <button
           type="button"
-          onClick={openCreate}
-          className="rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-dark shadow-sm transition hover:brightness-95"
+          onClick={() => void openPartnerContact()}
+          className="rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-dark shadow-sm transition hover:brightness-95"
         >
-          Add product
+          Contact for more details
         </button>
       </div>
 
@@ -174,233 +166,190 @@ export default function OurProductsPage() {
         </div>
       ) : rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-neutral-300 bg-white px-6 py-12 text-center text-sm text-slate-600">
-          No products yet. Create one to show in the app.
+          No products published for your company yet.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-neutral-200 bg-white shadow-sm">
-          <table className="min-w-full divide-y divide-neutral-200 text-sm">
-            <thead className="bg-neutral-50 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Product</th>
-                <th className="px-4 py-3">Visibility</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-100">
-              {rows.map((p) => (
-                <tr key={p.id} className="align-top">
-                  <td className="px-4 py-3">
-                    <p className="font-bold text-dark">{p.name}</p>
-                    {p.offerTag ? (
-                      <span className="mt-1 inline-block rounded-full bg-primary/25 px-2 py-0.5 text-xs font-semibold text-dark">
-                        {p.offerTag}
-                      </span>
-                    ) : null}
-                    {p.shortDescription ? (
-                      <p className="mt-1 line-clamp-2 text-xs text-slate-600">{p.shortDescription}</p>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-slate-700">
-                    <ul className="space-y-1">
-                      <li>{p.showInApp ? '✓ App' : '— App'}</li>
-                      <li>{p.highlightProduct ? '✓ Highlight' : '— Highlight'}</li>
-                      <li>{p.showOnHomeBanner ? '✓ Home banner' : '— Home banner'}</li>
-                    </ul>
-                  </td>
-                  <td className="px-4 py-3">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {rows.map((p) => {
+            const banner = resolveProductMediaUrl(p.bannerImage);
+            const active = p.status === 'active';
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setSelected(p)}
+                className={clsx(
+                  'group overflow-hidden rounded-2xl border bg-white text-left shadow-sm transition hover:shadow-md',
+                  active ? 'border-neutral-200' : 'border-neutral-200 opacity-75',
+                )}
+              >
+                <div className="relative aspect-[16/10] w-full overflow-hidden bg-neutral-100">
+                  {banner ? (
+                    <img
+                      src={banner}
+                      alt=""
+                      className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-sm font-medium text-slate-400">
+                      No banner image
+                    </div>
+                  )}
+                  {p.videoUrl?.trim() ? (
+                    <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-black/70 px-2.5 py-1 text-xs font-bold text-white">
+                      <span aria-hidden>▶</span> Video
+                    </span>
+                  ) : null}
+                </div>
+                <div className="space-y-2 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <h3 className="text-base font-black leading-snug text-dark">{p.name}</h3>
                     <span
                       className={clsx(
-                        'inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold',
-                        p.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-neutral-200 text-neutral-700',
+                        'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold',
+                        active ? 'bg-emerald-100 text-emerald-800' : 'bg-neutral-200 text-neutral-600',
                       )}
                     >
-                      {p.status === 'active' ? 'Active' : 'Inactive'}
+                      {active ? 'Active' : 'Inactive'}
                     </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => openEdit(p)}
-                      className="mr-2 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-dark hover:bg-neutral-50"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => remove(p.id)}
-                      className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100"
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                  {p.portfolioWide ? (
+                    <span className="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-900">
+                      Partner catalog
+                    </span>
+                  ) : null}
+                  {p.offerTag ? (
+                    <span className="inline-block rounded-full bg-primary/25 px-2 py-0.5 text-xs font-semibold text-dark">
+                      {p.offerTag}
+                    </span>
+                  ) : null}
+                  {p.shortDescription ? (
+                    <p className="line-clamp-3 text-sm leading-relaxed text-slate-600">{p.shortDescription}</p>
+                  ) : null}
+                  {p.price != null && p.price !== '' ? (
+                    <p className="text-sm font-black text-dark">₹{Number(p.price).toLocaleString('en-IN')}</p>
+                  ) : null}
+                  <p className="text-xs font-semibold text-primary">View details →</p>
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
       <SlideOverPanel
-        open={panelOpen}
-        onClose={() => {
-          if (!saving) {
-            setPanelOpen(false);
-            setEditingId('');
-          }
-        }}
-        title={editingId ? 'Edit product' : 'New product'}
+        open={Boolean(selected)}
+        title={selected?.name || 'Product'}
+        description={selected?.offerTag ? String(selected.offerTag) : undefined}
+        onClose={() => setSelected(null)}
         widthClass="max-w-lg"
       >
-        <div className="space-y-4 px-1 pb-6">
-          <div>
-            <label className="text-xs font-bold uppercase text-slate-500">Name *</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold uppercase text-slate-500">Short description</label>
-            <textarea
-              className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              rows={2}
-              value={form.shortDescription}
-              onChange={(e) => setForm((f) => ({ ...f, shortDescription: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold uppercase text-slate-500">Full description</label>
-            <textarea
-              className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              rows={4}
-              value={form.fullDescription}
-              onChange={(e) => setForm((f) => ({ ...f, fullDescription: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold uppercase text-slate-500">Banner image URL</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              placeholder="https://…"
-              value={form.bannerImage}
-              onChange={(e) => setForm((f) => ({ ...f, bannerImage: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold uppercase text-slate-500">Additional image URLs (one per line)</label>
-            <textarea
-              className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 font-mono text-xs"
-              rows={3}
-              value={form.imagesText}
-              onChange={(e) => setForm((f) => ({ ...f, imagesText: e.target.value }))}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-bold uppercase text-slate-500">Price (optional)</label>
-              <input
-                className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-                inputMode="decimal"
-                value={form.price}
-                onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold uppercase text-slate-500">Offer tag</label>
-              <input
-                className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-                placeholder="New, 20% OFF…"
-                value={form.offerTag}
-                onChange={(e) => setForm((f) => ({ ...f, offerTag: e.target.value }))}
-              />
-            </div>
-          </div>
-          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-3 space-y-2">
-            <p className="text-xs font-bold uppercase text-slate-500">Visibility</p>
-            <Toggle
-              checked={form.showInApp}
-              onChange={(v) => setForm((f) => ({ ...f, showInApp: v }))}
-              label="Show in app"
-              disabled={saving}
-            />
-            <Toggle
-              checked={form.highlightProduct}
-              onChange={(v) => setForm((f) => ({ ...f, highlightProduct: v }))}
-              label="Highlight (featured section)"
-              disabled={saving}
-            />
-            <Toggle
-              checked={form.showOnHomeBanner}
-              onChange={(v) => setForm((f) => ({ ...f, showOnHomeBanner: v }))}
-              label="Show on home banner slider"
-              disabled={saving}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold uppercase text-slate-500">Status</label>
-            <select
-              className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              value={form.status}
-              onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}
-            >
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </select>
-          </div>
-          <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
-            <p className="text-xs font-bold uppercase text-slate-500">Action button</p>
-            <input
-              className="w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              placeholder="Button label"
-              value={form.ctaLabel}
-              onChange={(e) => setForm((f) => ({ ...f, ctaLabel: e.target.value }))}
-            />
-            <select
-              className="w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              value={form.ctaType}
-              onChange={(e) => setForm((f) => ({ ...f, ctaType: e.target.value }))}
-            >
-              <option value="none">No action</option>
-              <option value="phone">Call number</option>
-              <option value="url">Open URL</option>
-              <option value="email">Send email</option>
-            </select>
-            {form.ctaType !== 'none' ? (
-              <input
-                className="w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-                placeholder={form.ctaType === 'phone' ? '+91…' : form.ctaType === 'email' ? 'sales@…' : 'https://…'}
-                value={form.ctaValue}
-                onChange={(e) => setForm((f) => ({ ...f, ctaValue: e.target.value }))}
-              />
-            ) : null}
-          </div>
-          <div className="flex gap-2 pt-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => {
-                if (!saving) {
-                  setPanelOpen(false);
-                  setEditingId('');
-                }
-              }}
-              className="flex-1 rounded-full border border-neutral-300 py-2.5 text-sm font-semibold text-dark hover:bg-neutral-50 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={persist}
-              className="flex-1 rounded-full bg-primary py-2.5 text-sm font-bold text-dark shadow-sm hover:brightness-95 disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
+        {selected ? (
+          <ProductDetailBody product={selected} onClose={() => setSelected(null)} />
+        ) : null}
+      </SlideOverPanel>
+
+      <SlideOverPanel
+        open={contactOpen}
+        title="Contact for more details"
+        description="Your platform partner (super admin)"
+        onClose={() => {
+          setContactOpen(false);
+          setPartner(null);
+          setContactError('');
+        }}
+        widthClass="sm:max-w-lg"
+      >
+        <div className="space-y-4 overflow-y-auto px-1 pb-2">
+          <PartnerSupportDetails partner={partner} loading={contactLoading} error={contactError} />
         </div>
       </SlideOverPanel>
+    </div>
+  );
+}
+
+function ProductDetailBody({ product: p, onClose }) {
+  const banner = resolveProductMediaUrl(p.bannerImage);
+  const extras = (Array.isArray(p.images) ? p.images : []).map(resolveProductMediaUrl).filter(Boolean);
+  const uniqueExtras = extras.filter((u) => u && u !== banner);
+  const video = String(p.videoUrl || '').trim();
+  const bodyText = (p.fullDescription || '').trim() || (p.shortDescription || '').trim();
+  const ctaType = String(p.ctaType || 'none').toLowerCase();
+  const ctaVal = String(p.ctaValue || '').trim();
+  const canCta = ctaType !== 'none' && ctaVal;
+
+  return (
+    <div className="space-y-5 pb-4 text-dark">
+      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50">
+        {banner ? (
+          <img src={banner} alt="" className="max-h-64 w-full object-cover object-center" />
+        ) : (
+          <div className="flex h-40 items-center justify-center text-sm text-slate-500">No banner image</div>
+        )}
+      </div>
+
+      {uniqueExtras.length > 0 ? (
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">More photos</p>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {uniqueExtras.map((url, i) => (
+              <button
+                key={`${url}-${i}`}
+                type="button"
+                onClick={() => openExternal(url)}
+                className="aspect-square overflow-hidden rounded-xl border border-neutral-200 bg-neutral-100"
+              >
+                <img src={url} alt="" className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {video ? (
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Video</p>
+          <div className="mt-2">
+            <ProductInlineVideo rawUrl={video} />
+          </div>
+        </div>
+      ) : null}
+
+      {bodyText ? (
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Details</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{bodyText}</p>
+        </div>
+      ) : null}
+
+      {p.price != null && p.price !== '' ? (
+        <p className="text-lg font-black">₹{Number(p.price).toLocaleString('en-IN')}</p>
+      ) : null}
+
+      {canCta ? (
+        <button
+          type="button"
+          onClick={() => {
+            if (ctaType === 'phone') window.location.href = `tel:${ctaVal.replace(/\s/g, '')}`;
+            else if (ctaType === 'email') window.location.href = `mailto:${ctaVal}`;
+            else openExternal(ctaVal);
+          }}
+          className="w-full rounded-xl border-2 border-dark bg-dark py-3 text-sm font-bold text-white transition hover:bg-neutral-800"
+        >
+          {p.ctaLabel?.trim() || 'Contact us'}
+        </button>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={onClose}
+        className="w-full rounded-xl border border-neutral-300 py-2.5 text-sm font-semibold text-dark hover:bg-neutral-50"
+      >
+        Close
+      </button>
     </div>
   );
 }

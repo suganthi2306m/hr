@@ -1,4 +1,7 @@
+const mongoose = require('mongoose');
 const PlatformSettings = require('../models/PlatformSettings');
+const Admin = require('../models/Admin');
+const Company = require('../models/Company');
 const { decryptSecret } = require('./fieldCrypto');
 const { validatePaysharpApiBaseUrlInput } = require('./paysharpService');
 
@@ -24,12 +27,48 @@ function readPlainFromDoc(doc, dotPath) {
 }
 
 /**
- * Razorpay: env wins; else decrypted credentials from PlatformSettings.razorpay
+ * Which super-admin owns billing for this company (same as subscription plan catalog owner).
  */
-async function getRazorpayConfig() {
+async function resolveSubscriptionCatalogOwnerId(company) {
+  if (!company) return null;
+  if (company.createdBySuperAdminId) return company.createdBySuperAdminId;
+  const main = await Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 }).select('_id').lean();
+  return main?._id || null;
+}
+
+async function resolveSubscriptionCatalogOwnerIdFromCompanyId(companyId) {
+  if (!companyId || !mongoose.Types.ObjectId.isValid(String(companyId))) return null;
+  const company = await Company.findById(companyId).select('createdBySuperAdminId').lean();
+  return resolveSubscriptionCatalogOwnerId(company);
+}
+
+/**
+ * Razorpay: with `billingAdminId`, use that admin's keys (partner has no fallback to platform/env).
+ * Without billingAdminId, legacy: env wins, then PlatformSettings.
+ */
+async function getRazorpayConfig(opts = {}) {
+  const billingAdminId = opts.billingAdminId;
+  const scoped = Boolean(billingAdminId) && mongoose.Types.ObjectId.isValid(String(billingAdminId));
+
+  let partnerOnly = false;
+
+  if (scoped) {
+    const adm = await Admin.findById(billingAdminId).select('paymentIntegrations role').lean();
+    if (adm) {
+      const rz = adm.paymentIntegrations?.razorpay || {};
+      const kidA = String(rz.keyId || '').trim();
+      const ksA = readPlainFromDoc({ razorpay: rz }, 'razorpay.keySecret');
+      const whA = readPlainFromDoc({ razorpay: rz }, 'razorpay.webhookSecret');
+      if (kidA && ksA) {
+        return { keyId: kidA, keySecret: ksA, webhookSecret: whA, source: 'db_admin' };
+      }
+      partnerOnly = adm.role === 'superadmin';
+    }
+  }
+
   const keyId = String(process.env.RAZORPAY_KEY_ID || '').trim();
   const keySecret = String(process.env.RAZORPAY_KEY_SECRET || '').trim();
-  if (keyId && keySecret) {
+  if (!partnerOnly && keyId && keySecret) {
     return {
       keyId,
       keySecret,
@@ -40,9 +79,9 @@ async function getRazorpayConfig() {
   const doc = await getOrCreatePlatformSettings();
   const rz = doc.razorpay || {};
   const kid = String(rz.keyId || '').trim();
-  const ks = readPlainFromDoc(doc, 'razorpay.keySecret', '');
-  const wh = readPlainFromDoc(doc, 'razorpay.webhookSecret', '');
-  if (kid && ks) {
+  const ks = readPlainFromDoc(doc, 'razorpay.keySecret');
+  const wh = readPlainFromDoc(doc, 'razorpay.webhookSecret');
+  if (!partnerOnly && kid && ks) {
     return { keyId: kid, keySecret: ks, webhookSecret: wh, source: 'db' };
   }
   return { keyId: '', keySecret: '', webhookSecret: wh, source: 'none' };
@@ -50,7 +89,6 @@ async function getRazorpayConfig() {
 
 /** Sandbox UPI / link-payment host (see Paysharp dashboard → Settings). */
 const DEFAULT_PAYSHARP_SANDBOX_BASE = 'https://sandbox.paysharp.co.in';
-/** Live host varies by account; set PAYSHARP_API_BASE_URL or Integrations when not using sandbox. */
 const DEFAULT_PAYSHARP_LIVE_BASE = String(process.env.PAYSHARP_LIVE_API_BASE_URL || '').trim();
 
 function paysharpBaseOrEmpty(raw) {
@@ -65,56 +103,73 @@ function paysharpBaseOrEmpty(raw) {
   return chk.value;
 }
 
-/**
- * Paysharp: Bearer token for Link Payment API + merchant from DB.
- * API token: PAYSHARP_API_TOKEN or PAYSHARP_BEARER_TOKEN (env) overrides DB — same value as dashboard “API token”, not webhook secret.
- * Base URL: env → DB override (invalid values ignored) → sandbox default if useSandbox, else PAYSHARP_LIVE_API_BASE_URL.
- */
-async function getPaysharpConfig() {
-  const doc = await getOrCreatePlatformSettings();
-  const p = doc.paysharp || {};
-  /** Dashboard secret key (often long hex) — optional Bearer; see PAYSHARP_SECRET_KEY. */
+function assemblePaysharpConfig(p, { useEnvToken, partnerOnly }) {
+  const pay = p || {};
   const secretKey = String(process.env.PAYSHARP_SECRET_KEY || '').trim();
-  const envToken = String(
-    process.env.PAYSHARP_API_TOKEN || process.env.PAYSHARP_BEARER_TOKEN || '',
-  ).trim();
-  const apiKeyFromDb = readPlainFromDoc(doc, 'paysharp.apiKey', '');
-  /**
-   * Bearer: explicit PAYSHARP_API_TOKEN / BEARER_TOKEN first (avoids short key in PAYSHARP_SECRET_KEY winning),
-   * then PAYSHARP_SECRET_KEY, then DB. For BizzPass-style long secret only in env, set PAYSHARP_SECRET_KEY and leave API_TOKEN empty.
-   */
+  const envToken = useEnvToken
+    ? String(process.env.PAYSHARP_API_TOKEN || process.env.PAYSHARP_BEARER_TOKEN || '').trim()
+    : '';
+  const apiKeyFromDb = readPlainFromDoc({ paysharp: pay }, 'paysharp.apiKey');
   const apiKey = envToken || secretKey || apiKeyFromDb;
-  const webhookSecret = readPlainFromDoc(doc, 'paysharp.webhookSecret', '');
+  const webhookSecret = readPlainFromDoc({ paysharp: pay }, 'paysharp.webhookSecret');
   const akTrim = String(apiKey || '').trim();
   const whTrim = String(webhookSecret || '').trim();
-  /** True when the same string is used as Bearer and webhook secret (common mis-paste). */
   const bearerMatchesWebhookSecret = Boolean(akTrim && whTrim && akTrim === whTrim);
   const envBase = String(process.env.PAYSHARP_API_BASE_URL || '').trim();
-  const dbBase = String(p.apiBaseUrl || '').trim();
+  const dbBase = String(pay.apiBaseUrl || '').trim();
   const sandboxEnv = String(process.env.PAYSHARP_SANDBOX_API_BASE_URL || '').trim();
   let apiBaseUrl = paysharpBaseOrEmpty(envBase) || paysharpBaseOrEmpty(dbBase);
   if (!apiBaseUrl) {
-    if (p.useSandbox) {
+    if (pay.useSandbox) {
       apiBaseUrl = paysharpBaseOrEmpty(sandboxEnv) || DEFAULT_PAYSHARP_SANDBOX_BASE;
     } else {
       apiBaseUrl = paysharpBaseOrEmpty(DEFAULT_PAYSHARP_LIVE_BASE) || DEFAULT_PAYSHARP_LIVE_BASE;
     }
   }
   return {
-    enabled: Boolean(p.enabled),
-    merchantId: String(p.merchantId || '').trim(),
+    enabled: Boolean(pay.enabled),
+    merchantId: String(pay.merchantId || '').trim(),
     apiKey,
     webhookSecret,
     apiBaseUrl: apiBaseUrl.replace(/\/+$/, ''),
-    useSandbox: Boolean(p.useSandbox),
-    /** 'env' | 'env_secret' | 'db' | 'none' — which credential supplies Bearer */
+    useSandbox: Boolean(pay.useSandbox),
     apiTokenSource: envToken ? 'env' : secretKey ? 'env_secret' : apiKeyFromDb ? 'db' : 'none',
     bearerMatchesWebhookSecret,
+    partnerOnly: Boolean(partnerOnly),
   };
+}
+
+/**
+ * Paysharp: with `billingAdminId`, use that admin's integration (partner super admin has no platform/env Bearer fallback).
+ * Main super admin with empty admin doc still falls back to env + PlatformSettings.
+ */
+async function getPaysharpConfig(opts = {}) {
+  const billingAdminId = opts.billingAdminId;
+  const scoped = Boolean(billingAdminId) && mongoose.Types.ObjectId.isValid(String(billingAdminId));
+
+  if (scoped) {
+    const adm = await Admin.findById(billingAdminId).select('paymentIntegrations role').lean();
+    if (adm) {
+      const p = adm.paymentIntegrations?.paysharp || {};
+      const apiKeyFromDb = readPlainFromDoc({ paysharp: p }, 'paysharp.apiKey');
+      if (String(apiKeyFromDb || '').trim()) {
+        return assemblePaysharpConfig(p, { useEnvToken: false, partnerOnly: false });
+      }
+      if (adm.role === 'superadmin') {
+        return assemblePaysharpConfig(p, { useEnvToken: false, partnerOnly: true });
+      }
+    }
+  }
+
+  const doc = await getOrCreatePlatformSettings();
+  const p = doc.paysharp || {};
+  return assemblePaysharpConfig(p, { useEnvToken: true, partnerOnly: false });
 }
 
 module.exports = {
   getOrCreatePlatformSettings,
+  resolveSubscriptionCatalogOwnerId,
+  resolveSubscriptionCatalogOwnerIdFromCompanyId,
   getRazorpayConfig,
   getPaysharpConfig,
 };

@@ -128,6 +128,31 @@ export function getOpsCalendarCellMeta(row, weeklyOffPolicy) {
   }
 
   const attSt = resolveAttendanceStatus(att);
+  /** True when the employee actually worked (or is awaiting approval with a punch) — overrides “scheduled off”. */
+  const workedThroughScheduledOff =
+    att &&
+    (attSt === 'PRESENT' ||
+      attSt === 'HALF_DAY' ||
+      attSt === 'PENDING' ||
+      Boolean(resolvePunchInRaw(att)) ||
+      (Number(resolveWorkedMinutes(att)) || 0) > 0);
+
+  if (isWeekend && !workedThroughScheduledOff) {
+    if (attSt === 'LEAVE' || att?.dayStatus === 'LEAVE') {
+      const cap = att.leaveKind === 'paid' ? 'Paid leave' : att.leaveKind === 'unpaid' ? 'Unpaid leave' : 'Leave';
+      return { key: 'leave', label: cap, tone: 'leave' };
+    }
+    if (
+      !att ||
+      attSt === 'ABSENT' ||
+      att?.dayStatus === 'ABSENT' ||
+      attSt === 'HOLIDAY' ||
+      att?.dayStatus === 'HOLIDAY'
+    ) {
+      return { key: 'weekoff', label: 'Week Off', tone: 'weekend' };
+    }
+  }
+
   if (attSt === 'HOLIDAY' || att?.dayStatus === 'HOLIDAY') {
     return { key: 'holiday', label: 'Holiday', tone: 'holiday' };
   }

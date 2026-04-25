@@ -181,6 +181,13 @@ export default function SuperAdminCompaniesPage() {
                     <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-3">
                         <Link
+                          to="/super/our-products"
+                          className="text-sm font-semibold text-slate-700 hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Products
+                        </Link>
+                        <Link
                           to={`/super/companies/${row._id}`}
                           className="text-sm font-semibold text-primary hover:underline"
                           onClick={(e) => e.stopPropagation()}

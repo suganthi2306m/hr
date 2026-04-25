@@ -37,8 +37,17 @@ function addMonths(date, months) {
   return d;
 }
 
+/** Calendar-day extension from [date] (trial length). */
+function addDays(date, days) {
+  const d = new Date(date);
+  const n = Math.max(0, Math.floor(Number(days) || 0));
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
 module.exports = {
   generateUniqueLicenseKey,
   addMonths,
+  addDays,
   normalizePlanTag,
 };

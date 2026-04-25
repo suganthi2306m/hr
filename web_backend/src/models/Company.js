@@ -198,6 +198,8 @@ const companySubscriptionSchema = new mongoose.Schema(
     maxUsers: { type: Number, default: null },
     maxBranches: { type: Number, default: null },
     expiresAt: { type: Date, default: null },
+    /** Mirrors the active license: trial vs paid (for UI / clients). */
+    isTrial: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
     /** Tenant-visible notes (e.g. renewal terms, PO number). */
     renewalDetails: { type: String, trim: true, default: '' },

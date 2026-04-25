@@ -6,20 +6,24 @@ class CompanyProductCard {
     required this.name,
     required this.shortDescription,
     required this.bannerImage,
+    required this.videoUrl,
     required this.offerTag,
     required this.price,
     required this.highlightProduct,
     required this.showOnHomeBanner,
+    this.portfolioWide = false,
   });
 
   final String id;
   final String name;
   final String shortDescription;
   final String bannerImage;
+  final String videoUrl;
   final String offerTag;
   final double? price;
   final bool highlightProduct;
   final bool showOnHomeBanner;
+  final bool portfolioWide;
 
   factory CompanyProductCard.fromJson(Map<String, dynamic> j) {
     double? p;
@@ -34,10 +38,12 @@ class CompanyProductCard {
       name: '${j['name'] ?? ''}',
       shortDescription: '${j['shortDescription'] ?? ''}',
       bannerImage: '${j['bannerImage'] ?? ''}',
+      videoUrl: '${j['videoUrl'] ?? ''}',
       offerTag: '${j['offerTag'] ?? ''}',
       price: p,
       highlightProduct: j['highlightProduct'] == true,
       showOnHomeBanner: j['showOnHomeBanner'] == true,
+      portfolioWide: j['portfolioWide'] == true,
     );
   }
 }
@@ -48,10 +54,12 @@ class CompanyProductDetail extends CompanyProductCard {
     required super.name,
     required super.shortDescription,
     required super.bannerImage,
+    required super.videoUrl,
     required super.offerTag,
     required super.price,
     required super.highlightProduct,
     required super.showOnHomeBanner,
+    super.portfolioWide,
     required this.fullDescription,
     required this.images,
     required this.ctaLabel,
@@ -76,10 +84,12 @@ class CompanyProductDetail extends CompanyProductCard {
       name: base.name,
       shortDescription: base.shortDescription,
       bannerImage: base.bannerImage,
+      videoUrl: base.videoUrl,
       offerTag: base.offerTag,
       price: base.price,
       highlightProduct: base.highlightProduct,
       showOnHomeBanner: base.showOnHomeBanner,
+      portfolioWide: base.portfolioWide,
       fullDescription: '${j['fullDescription'] ?? ''}',
       images: list,
       ctaLabel: '${j['ctaLabel'] ?? 'Contact Us'}',

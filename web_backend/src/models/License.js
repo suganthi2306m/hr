@@ -11,6 +11,7 @@ const licenseSchema = new mongoose.Schema(
     planName: { type: String, trim: true, default: '' },
     maxUsers: { type: Number, required: true, min: 1 },
     maxBranches: { type: Number, required: true, min: 1 },
+    validFrom: { type: Date, default: null },
     validUntil: { type: Date, required: true },
     status: { type: String, enum: LICENSE_STATUSES, default: 'unassigned' },
     isTrial: { type: Boolean, default: false },

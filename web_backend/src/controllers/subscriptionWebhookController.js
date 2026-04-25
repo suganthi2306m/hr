@@ -1,6 +1,9 @@
 const PaymentTransaction = require('../models/PaymentTransaction');
 const { verifyRazorpayWebhookSignature } = require('../services/razorpayService');
-const { getRazorpayConfig } = require('../services/platformGatewayConfig');
+const {
+  getRazorpayConfig,
+  resolveSubscriptionCatalogOwnerIdFromCompanyId,
+} = require('../services/platformGatewayConfig');
 const { applyCapturedSubscriptionPayment } = require('../services/subscriptionEntitlementService');
 
 /**
@@ -11,18 +14,6 @@ async function razorpayWebhook(req, res, next) {
     const raw = req.body;
     const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(typeof raw === 'string' ? raw : JSON.stringify(raw || {}));
     const sig = req.get('X-Razorpay-Signature') || req.get('x-razorpay-signature');
-    const rz = await getRazorpayConfig();
-    if (process.env.NODE_ENV === 'production' && !rz.webhookSecret) {
-      return res.status(503).json({ message: 'Razorpay webhook secret is not configured.' });
-    }
-    if (rz.webhookSecret) {
-      if (!verifyRazorpayWebhookSignature(buf, sig, rz.webhookSecret)) {
-        return res.status(400).json({ message: 'Invalid signature' });
-      }
-    } else {
-      // eslint-disable-next-line no-console
-      console.warn('[subscription] Razorpay webhook: no RAZORPAY_WEBHOOK_SECRET / DB secret — skipping signature check (dev only).');
-    }
 
     let payload;
     try {
@@ -49,6 +40,21 @@ async function razorpayWebhook(req, res, next) {
     });
     if (!pay) {
       return res.json({ ok: true, note: 'payment not found or already processed' });
+    }
+
+    const billingAdminId =
+      pay.billingAdminId || (await resolveSubscriptionCatalogOwnerIdFromCompanyId(pay.companyId));
+    const rz = await getRazorpayConfig({ billingAdminId });
+    if (process.env.NODE_ENV === 'production' && !rz.webhookSecret) {
+      return res.status(503).json({ message: 'Razorpay webhook secret is not configured.' });
+    }
+    if (rz.webhookSecret) {
+      if (!verifyRazorpayWebhookSignature(buf, sig, rz.webhookSecret)) {
+        return res.status(400).json({ message: 'Invalid signature' });
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[subscription] Razorpay webhook: no RAZORPAY_WEBHOOK_SECRET / DB secret — skipping signature check (dev only).');
     }
 
     pay.status = 'captured';

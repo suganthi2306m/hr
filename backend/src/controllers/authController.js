@@ -80,6 +80,50 @@ function resolveOfficeLocationFromCompanyBranch(user, companyDoc) {
     };
 }
 
+/**
+ * Staff app access: company must be active and within trial / subscription dates when those fields are set.
+ */
+function companyAllowsStaffAccess(company) {
+    if (!company) return { ok: true };
+    if (company.isActive === false) {
+        return { ok: false, code: 'company_inactive', message: 'Company account is inactive.' };
+    }
+    if (company.isSuspended) {
+        return { ok: false, code: 'company_suspended', message: 'Company account is suspended.' };
+    }
+    const now = Date.now();
+    const tr = company.trial && typeof company.trial === 'object' ? company.trial : {};
+    if (tr.isTrial === true && tr.trialEndDate) {
+        const t = new Date(tr.trialEndDate).getTime();
+        if (Number.isFinite(t) && t < now) {
+            return {
+                ok: false,
+                code: 'trial_expired',
+                message: 'Your organization trial has ended. Ask your administrator to upgrade or renew.',
+            };
+        }
+    }
+    const status = String(company.subscriptionStatus || '').toLowerCase();
+    if (status === 'expired' || status === 'cancelled') {
+        return {
+            ok: false,
+            code: 'subscription_inactive',
+            message: 'Company subscription is not active.',
+        };
+    }
+    if (company.subscriptionEndDate) {
+        const t = new Date(company.subscriptionEndDate).getTime();
+        if (Number.isFinite(t) && t < now) {
+            return {
+                ok: false,
+                code: 'subscription_expired',
+                message: 'Company subscription has expired. Contact your administrator to renew.',
+            };
+        }
+    }
+    return { ok: true };
+}
+
 // Helper to find user by email in current User model only
 const findOrCreateUserByEmail = async (rawEmail) => {
     if (!rawEmail) return null;
@@ -218,10 +262,21 @@ const login = async (req, res) => {
         let companyDoc = null;
         try {
             if (company) {
-                companyDoc = await Company.findById(company).select('name branches employeeCustomFieldDefs').lean();
+                companyDoc = await Company.findById(company)
+                    .select('name branches employeeCustomFieldDefs isActive isSuspended trial subscriptionStatus subscriptionEndDate')
+                    .lean();
             }
         } catch (e) {
             console.warn('[Auth] Company lookup failed:', e?.message);
+        }
+        if (companyDoc) {
+            const access = companyAllowsStaffAccess(companyDoc);
+            if (!access.ok) {
+                return res.status(403).json({
+                    success: false,
+                    error: { message: access.message, code: access.code },
+                });
+            }
         }
         const officeLocation = resolveOfficeLocationFromCompanyBranch(user, companyDoc) || user.officeLocation || null;
         const formattedPermissions = user.roleId?.permissions || [];
@@ -331,10 +386,21 @@ const googleLogin = async (req, res) => {
         let companyDoc = null;
         try {
             if (company) {
-                companyDoc = await Company.findById(company).select('name branches employeeCustomFieldDefs').lean();
+                companyDoc = await Company.findById(company)
+                    .select('name branches employeeCustomFieldDefs isActive isSuspended trial subscriptionStatus subscriptionEndDate')
+                    .lean();
             }
         } catch (e) {
             console.warn('[Auth] Company lookup failed (google):', e?.message);
+        }
+        if (companyDoc) {
+            const access = companyAllowsStaffAccess(companyDoc);
+            if (!access.ok) {
+                return res.status(403).json({
+                    success: false,
+                    error: { message: access.message, code: access.code },
+                });
+            }
         }
         const officeLocation = resolveOfficeLocationFromCompanyBranch(user, companyDoc) || user.officeLocation || null;
         const formattedPermissions = user.roleId?.permissions || [];
@@ -986,9 +1052,30 @@ const checkActive = async (req, res) => {
         if (!userId) {
             return res.status(401).json({ success: false, active: false });
         }
-        const user = await User.findById(userId).select('isActive').lean();
-        const active = !!user && user.isActive !== false;
-        return res.json({ success: true, active: !!active });
+        const user = await User.findById(userId)
+            .select('isActive companyId')
+            .populate({
+                path: 'companyId',
+                select: 'isActive isSuspended trial subscriptionStatus subscriptionEndDate',
+            })
+            .lean();
+        const userActive = !!user && user.isActive !== false;
+        let companyOk = true;
+        let block = null;
+        if (userActive && user.companyId) {
+            const c = user.companyId;
+            const access = companyAllowsStaffAccess(c);
+            companyOk = access.ok;
+            if (!access.ok) {
+                block = { reason: access.code, message: access.message };
+            }
+        }
+        const active = !!(userActive && companyOk);
+        return res.json({
+            success: true,
+            active,
+            ...(block && !active ? { reason: block.reason, message: block.message } : {}),
+        });
     } catch (err) {
         console.error('[authController] checkActive:', err.message);
         return res.status(500).json({ success: false, active: false });

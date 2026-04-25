@@ -15,6 +15,7 @@ async function syncCompanyFromLicenseDoc(companyId, lic) {
       'subscription.maxUsers': lic.maxUsers,
       'subscription.maxBranches': lic.maxBranches,
       'subscription.expiresAt': lic.validUntil,
+      'subscription.isTrial': Boolean(lic.isTrial),
       'subscription.isActive': true,
     },
   });
@@ -50,6 +51,10 @@ async function applyCapturedSubscriptionPayment(payment) {
   const currentEnd = lic.validUntil && new Date(lic.validUntil) > now ? new Date(lic.validUntil) : now;
   lic.validUntil = addMonths(currentEnd, durationMonths);
   lic.status = 'active';
+  lic.isTrial = false;
+  if (!lic.validFrom || new Date(lic.validFrom) > now) {
+    lic.validFrom = now;
+  }
   await lic.save();
 
   await syncCompanyFromLicenseDoc(companyId, lic);

@@ -22,22 +22,34 @@ export function Field({ label, required, className = '', children }) {
   );
 }
 
-export function ReadField({ label, value, className = '', mono, accent }) {
+export function ReadField({ label, value, className = '', mono, accent, linkExternal }) {
   const empty = value == null || String(value).trim() === '';
-  const display = empty ? '—' : value;
+  const raw = empty ? '' : String(value).trim();
+  const href =
+    linkExternal && !empty ? (/^https?:\/\//i.test(raw) ? raw : `https://${raw}`) : null;
+  const textClass = clsx(
+    'mt-1 whitespace-pre-wrap break-words text-sm font-semibold text-dark',
+    mono && 'font-mono text-xs',
+    accent && 'text-primary',
+    empty && 'font-normal text-slate-400',
+  );
   return (
     <div className={clsx('form-field min-w-0', className)}>
       <p className="form-label-muted">{label}</p>
-      <p
-        className={clsx(
-          'mt-1 whitespace-pre-wrap break-words text-sm font-semibold text-dark',
-          mono && 'font-mono text-xs',
-          accent && 'text-primary',
-          empty && 'font-normal text-slate-400',
-        )}
-      >
-        {display}
-      </p>
+      {empty ? (
+        <p className={textClass}>—</p>
+      ) : href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={clsx(textClass, 'inline-block text-primary underline decoration-primary/40 underline-offset-2')}
+        >
+          {raw}
+        </a>
+      ) : (
+        <p className={textClass}>{raw}</p>
+      )}
     </div>
   );
 }

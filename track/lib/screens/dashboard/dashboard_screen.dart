@@ -189,8 +189,24 @@ class _DashboardScreenState extends State<DashboardScreen>
     final token = prefs.getString('token');
     if (token == null || token.isEmpty || !mounted) return null;
 
-    final active = await AuthService().checkUserActive();
-    if (active != false || !mounted) return active;
+    final result = await AuthService().checkUserActiveDetailed();
+    if (!result.shouldLogout || !mounted) return result.active;
+
+    if (result.hasUserFacingMessage) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Access ended'),
+          content: Text(result.message!.trim()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
 
     await AuthService().logout();
     if (!mounted) return false;
@@ -699,6 +715,76 @@ class _DashboardScreenState extends State<DashboardScreen>
     });
   }
 
+  /// Opens full catalog (`GET /api/products`) — same company as the logged-in user.
+  Widget _buildOurProductsCard(BuildContext context) {
+    final ink = _ink;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: () => _openProductsCatalog(context),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: _card,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 12, 18),
+            child: Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.32),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Icon(Icons.inventory_2_rounded, color: ink, size: 26),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Our Products',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                          color: ink,
+                          letterSpacing: -0.35,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Browse offers from your company',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: ink.withValues(alpha: 0.52),
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, color: ink.withValues(alpha: 0.38), size: 30),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildProductsSpotlight(BuildContext context) {
     final ink = _ink;
     final banners = _productHome.banners;
@@ -1071,6 +1157,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                       _buildHeader(context),
                       const SizedBox(height: 22),
                       _yellowProgressCard(summary),
+                      const SizedBox(height: 16),
+                      _buildOurProductsCard(context),
                       if (_productHome.banners.isNotEmpty || _productHome.highlighted.isNotEmpty) ...[
                         const SizedBox(height: 22),
                         _buildProductsSpotlight(context),

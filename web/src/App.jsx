@@ -42,6 +42,7 @@ const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const PlatformModulesPage = lazy(() => import('./pages/PlatformModulesPage'));
 const SubscriptionBillingPage = lazy(() => import('./pages/SubscriptionBillingPage'));
 const OurProductsPage = lazy(() => import('./pages/OurProductsPage'));
+const SupportPage = lazy(() => import('./pages/SupportPage'));
 const SuperAdminLayout = lazy(() => import('./pages/superadmin/SuperAdminLayout'));
 const SuperAdminDashboardPage = lazy(() => import('./pages/superadmin/SuperAdminDashboardPage'));
 const SuperAdminCompaniesPage = lazy(() => import('./pages/superadmin/SuperAdminCompaniesPage'));
@@ -56,6 +57,7 @@ const SuperAdminPaymentsPage = lazy(() => import('./pages/superadmin/SuperAdminP
 const SuperAdminPartnersPage = lazy(() => import('./pages/superadmin/SuperAdminPartnersPage'));
 const SuperAdminPartnerDetailPage = lazy(() => import('./pages/superadmin/SuperAdminPartnerDetailPage'));
 const SuperAdminPlaceholderPage = lazy(() => import('./pages/superadmin/SuperAdminPlaceholderPage'));
+const SuperAdminOurProductsPage = lazy(() => import('./pages/superadmin/SuperAdminOurProductsPage'));
 
 function withSuspense(node) {
   return (
@@ -103,6 +105,7 @@ function App() {
         <Route path="super-admins/:id" element={withSuspense(<SuperAdminPartnerDetailPage />)} />
         <Route path="notifications" element={withSuspense(<SuperAdminPlaceholderPage title="Notifications" subtitle="Cross-tenant alerts will appear here." />)} />
         <Route path="integrations" element={withSuspense(<SuperAdminIntegrationsPage />)} />
+        <Route path="our-products" element={withSuspense(<SuperAdminOurProductsPage />)} />
         <Route path="settings" element={withSuspense(<SuperAdminSettingsPage />)} />
       </Route>
       <Route
@@ -117,6 +120,7 @@ function App() {
         <Route path="profile" element={withSuspense(<ProfilePage />)} />
         <Route path="billing" element={withSuspense(<SubscriptionBillingPage />)} />
         <Route path="our-products" element={withSuspense(<OurProductsPage />)} />
+        <Route path="support" element={withSuspense(<SupportPage />)} />
         <Route path="settings/organization-info" element={withSuspense(<OrganizationInfoPage />)} />
         <Route path="settings/organization" element={withSuspense(<OrganizationSetupPage />)} />
         <Route path="settings/roles" element={withSuspense(<RolesPermissionsPage />)} />

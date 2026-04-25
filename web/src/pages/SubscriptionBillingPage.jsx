@@ -501,7 +501,12 @@ export default function SubscriptionBillingPage() {
             {sub.daysLeft != null ? (
               <span className="inline-flex items-center gap-1.5">
                 <IconClock className="text-primary" />
-                {sub.daysLeft} days left
+                {sub.daysLeft} days left{sub.isTrial ? ' (trial)' : ''}
+              </span>
+            ) : null}
+            {sub.isTrial ? (
+              <span className="inline-flex items-center gap-1.5 text-amber-800">
+                Trial license — renew or subscribe before access ends.
               </span>
             ) : null}
             {sub.maxUsers != null ? (
