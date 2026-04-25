@@ -31,6 +31,10 @@ const customerSchema = new mongoose.Schema(
       default: undefined,
     },
     businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Business', required: true },
+    /** Mirror key for web admin compatibility (same tenant as businessId). */
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+    /** Optional owner admin id for cross-surface visibility with web admin tooling. */
+    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null, index: true },
     /** Customer site coordinates for company-visit / nearby detection (optional until set in admin). */
     geoLocation: {
       lat: { type: Number },

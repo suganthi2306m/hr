@@ -205,190 +205,21 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
       );
       return;
     }
-    final noteCtrl = TextEditingController();
-    var selectedLeadId = _items.first.id;
-    var actionType = 'call';
-    var statusAfter = '';
-    DateTime? nextFollowUpAt;
-    String? error;
-    var saving = false;
-
-    await showModalBottomSheet<void>(
+    final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setLocal) {
-            Future<void> pickNextDate() async {
-              final now = DateTime.now();
-              final d = await showDatePicker(
-                context: ctx,
-                initialDate: now,
-                firstDate: now.subtract(const Duration(days: 365)),
-                lastDate: now.add(const Duration(days: 365 * 3)),
-              );
-              if (d != null) {
-                setLocal(() => nextFollowUpAt = DateTime(d.year, d.month, d.day, 10));
-              }
-            }
-
-            Future<void> submit() async {
-              if (noteCtrl.text.trim().isEmpty) {
-                setLocal(() => error = 'Follow-up note is required.');
-                return;
-              }
-              setLocal(() {
-                saving = true;
-                error = null;
-              });
-              var closedSheet = false;
-              try {
-                await _leadService.addFollowUp(
-                  leadId: selectedLeadId,
-                  note: noteCtrl.text.trim(),
-                  actionType: actionType,
-                  nextFollowUpAt: nextFollowUpAt,
-                  statusAfter: statusAfter.isEmpty ? null : statusAfter,
-                );
-                if (!mounted || !ctx.mounted) return;
-                Navigator.pop(ctx);
-                closedSheet = true;
-                await _load();
-                if (mounted) setState(() => _tabIndex = 1);
-              } catch (e) {
-                if (ctx.mounted) setLocal(() => error = _dioErrorMessage(e));
-              } finally {
-                if (!closedSheet && ctx.mounted) setLocal(() => saving = false);
-              }
-            }
-
-            return DraggableScrollableSheet(
-              initialChildSize: 0.78,
-              minChildSize: 0.52,
-              maxChildSize: 0.95,
-              expand: false,
-              builder: (_, scrollController) {
-                return Container(
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-                  ),
-                  child: ListView(
-                    controller: scrollController,
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 42,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      const Text('Create Follow-up', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 12),
-                      _fieldLabel('Lead'),
-                      DropdownButtonFormField<String>(
-                        value: selectedLeadId,
-                        decoration: _formFieldDecoration(
-                          hint: 'Select lead',
-                          icon: Icons.person_outline_rounded,
-                        ),
-                        items: _items
-                            .map((e) => DropdownMenuItem(
-                                  value: e.id,
-                                  child: Text('${e.leadName} - ${e.companyName}'),
-                                ))
-                            .toList(),
-                        onChanged: (v) => setLocal(() => selectedLeadId = v ?? selectedLeadId),
-                      ),
-                      const SizedBox(height: 10),
-                      _fieldLabel('Notes'),
-                      TextField(
-                        controller: noteCtrl,
-                        decoration: _formFieldDecoration(
-                          hint: 'Enter follow-up notes',
-                          icon: Icons.description_outlined,
-                        ),
-                        maxLines: 4,
-                      ),
-                      const SizedBox(height: 10),
-                      _fieldLabel('Follow-up type'),
-                      DropdownButtonFormField<String>(
-                        value: actionType,
-                        decoration: _formFieldDecoration(
-                          hint: 'Select follow-up type',
-                          icon: Icons.call_outlined,
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: 'call', child: Text('Call')),
-                          DropdownMenuItem(value: 'visit', child: Text('Visit')),
-                          DropdownMenuItem(value: 'message', child: Text('Message')),
-                          DropdownMenuItem(value: 'other', child: Text('Other')),
-                        ],
-                        onChanged: (v) => setLocal(() => actionType = v ?? 'call'),
-                      ),
-                      const SizedBox(height: 10),
-                      _fieldLabel('Status update (optional)'),
-                      DropdownButtonFormField<String>(
-                        value: statusAfter.isEmpty ? null : statusAfter,
-                        decoration: _formFieldDecoration(
-                          hint: 'Select status',
-                          icon: Icons.flag_outlined,
-                        ),
-                        items: _statusItems,
-                        onChanged: (v) => setLocal(() => statusAfter = v ?? ''),
-                      ),
-                      const SizedBox(height: 10),
-                      _fieldLabel('Next follow-up date'),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              nextFollowUpAt == null
-                                  ? 'No next follow-up date'
-                                  : 'Next: ${_fmtDateTime(nextFollowUpAt)}',
-                            ),
-                          ),
-                          TextButton(onPressed: pickNextDate, child: const Text('Pick')),
-                        ],
-                      ),
-                      if (error != null) ...[
-                        const SizedBox(height: 6),
-                        Text(error!, style: const TextStyle(color: Colors.red)),
-                      ],
-                      const SizedBox(height: 14),
-                      FilledButton.icon(
-                        onPressed: saving ? null : submit,
-                        icon: const Icon(Icons.check_circle_outline_rounded),
-                        label: Text(saving ? 'Saving...' : 'Save Follow-up'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: Colors.black,
-                          minimumSize: const Size.fromHeight(48),
-                          textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: saving ? null : () => Navigator.pop(ctx),
-                        child: const Text('Cancel'),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            );
-          },
-        );
-      },
+      builder: (_) => _AddLeadFollowUpBottomSheet(
+        leadService: _leadService,
+        leads: _items,
+        statusItems: _statusItems,
+        fmtDateTime: _fmtDateTime,
+      ),
     );
-    noteCtrl.dispose();
+    if (saved == true && mounted) {
+      await _load();
+      if (mounted) setState(() => _tabIndex = 1);
+    }
   }
 
   Future<void> _pickDate({required bool from}) async {
@@ -852,7 +683,7 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
           ],
         ),
         bottomNavigationBar: OvalBottomNavBar(
-          currentIndex: 3,
+          currentIndex: 4,
           onTap: (idx) => pushMainShellByIndex(context, idx),
         ),
       ),
@@ -872,6 +703,216 @@ class _AddLeadBottomSheet extends StatefulWidget {
 
   @override
   State<_AddLeadBottomSheet> createState() => _AddLeadBottomSheetState();
+}
+
+/// Dedicated stateful follow-up sheet to avoid StatefulBuilder/form disposal races.
+class _AddLeadFollowUpBottomSheet extends StatefulWidget {
+  const _AddLeadFollowUpBottomSheet({
+    required this.leadService,
+    required this.leads,
+    required this.statusItems,
+    required this.fmtDateTime,
+  });
+
+  final LeadService leadService;
+  final List<LeadItem> leads;
+  final List<DropdownMenuItem<String>> statusItems;
+  final String Function(DateTime?) fmtDateTime;
+
+  @override
+  State<_AddLeadFollowUpBottomSheet> createState() =>
+      _AddLeadFollowUpBottomSheetState();
+}
+
+class _AddLeadFollowUpBottomSheetState
+    extends State<_AddLeadFollowUpBottomSheet> {
+  late final TextEditingController _noteCtrl;
+  late String _selectedLeadId;
+  String _actionType = 'call';
+  String _statusAfter = '';
+  DateTime? _nextFollowUpAt;
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _noteCtrl = TextEditingController();
+    _selectedLeadId = widget.leads.first.id;
+  }
+
+  @override
+  void dispose() {
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickNextDate() async {
+    final now = DateTime.now();
+    final d = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: now.subtract(const Duration(days: 365)),
+      lastDate: now.add(const Duration(days: 365 * 3)),
+    );
+    if (!mounted || d == null) return;
+    setState(() => _nextFollowUpAt = DateTime(d.year, d.month, d.day, 10));
+  }
+
+  Future<void> _submit() async {
+    if (_noteCtrl.text.trim().isEmpty) {
+      setState(() => _error = 'Follow-up note is required.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.leadService.addFollowUp(
+        leadId: _selectedLeadId,
+        note: _noteCtrl.text.trim(),
+        actionType: _actionType,
+        nextFollowUpAt: _nextFollowUpAt,
+        statusAfter: _statusAfter.isEmpty ? null : _statusAfter,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = _dioErrorMessage(e);
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.78,
+      minChildSize: 0.52,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (_, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+          ),
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 22),
+            children: [
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text('Create Follow-up', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 12),
+              _leadModalFieldLabel('Lead'),
+              DropdownButtonFormField<String>(
+                value: _selectedLeadId,
+                decoration: _leadModalInputDecoration(
+                  hint: 'Select lead',
+                  icon: Icons.person_outline_rounded,
+                ),
+                items: widget.leads
+                    .map((e) => DropdownMenuItem(
+                          value: e.id,
+                          child: Text('${e.leadName} - ${e.companyName}'),
+                        ))
+                    .toList(),
+                onChanged: _saving
+                    ? null
+                    : (v) => setState(() => _selectedLeadId = v ?? _selectedLeadId),
+              ),
+              const SizedBox(height: 10),
+              _leadModalFieldLabel('Notes'),
+              TextField(
+                controller: _noteCtrl,
+                decoration: _leadModalInputDecoration(
+                  hint: 'Enter follow-up notes',
+                  icon: Icons.description_outlined,
+                ),
+                maxLines: 4,
+              ),
+              const SizedBox(height: 10),
+              _leadModalFieldLabel('Follow-up type'),
+              DropdownButtonFormField<String>(
+                value: _actionType,
+                decoration: _leadModalInputDecoration(
+                  hint: 'Select follow-up type',
+                  icon: Icons.call_outlined,
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'call', child: Text('Call')),
+                  DropdownMenuItem(value: 'visit', child: Text('Visit')),
+                  DropdownMenuItem(value: 'message', child: Text('Message')),
+                  DropdownMenuItem(value: 'other', child: Text('Other')),
+                ],
+                onChanged: _saving ? null : (v) => setState(() => _actionType = v ?? 'call'),
+              ),
+              const SizedBox(height: 10),
+              _leadModalFieldLabel('Status update (optional)'),
+              DropdownButtonFormField<String>(
+                value: _statusAfter.isEmpty ? null : _statusAfter,
+                decoration: _leadModalInputDecoration(
+                  hint: 'Select status',
+                  icon: Icons.flag_outlined,
+                ),
+                items: widget.statusItems,
+                onChanged: _saving ? null : (v) => setState(() => _statusAfter = v ?? ''),
+              ),
+              const SizedBox(height: 10),
+              _leadModalFieldLabel('Next follow-up date'),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _nextFollowUpAt == null
+                          ? 'No next follow-up date'
+                          : 'Next: ${widget.fmtDateTime(_nextFollowUpAt)}',
+                    ),
+                  ),
+                  TextButton(onPressed: _saving ? null : _pickNextDate, child: const Text('Pick')),
+                ],
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 6),
+                Text(_error!, style: const TextStyle(color: Colors.red)),
+              ],
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: _saving ? null : _submit,
+                icon: const Icon(Icons.check_circle_outline_rounded),
+                label: Text(_saving ? 'Saving...' : 'Save Follow-up'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.black,
+                  minimumSize: const Size.fromHeight(48),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _AddLeadBottomSheetState extends State<_AddLeadBottomSheet> {

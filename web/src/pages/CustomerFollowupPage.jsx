@@ -6,6 +6,7 @@ export default function CustomerFollowupPage() {
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -17,6 +18,7 @@ export default function CustomerFollowupPage() {
   const [formNote, setFormNote] = useState('');
   const [formType, setFormType] = useState('call');
   const [formNext, setFormNext] = useState('');
+  const [formAssignedTo, setFormAssignedTo] = useState('');
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
@@ -46,13 +48,25 @@ export default function CustomerFollowupPage() {
     }
   };
 
+  const loadUsers = async () => {
+    try {
+      const { data } = await apiClient.get('/users');
+      setUsers(Array.isArray(data?.items) ? data.items : []);
+    } catch {
+      setUsers([]);
+    }
+  };
+
   useEffect(() => {
     void load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- mount load only
   }, []);
 
   useEffect(() => {
-    if (showAdd) void loadCustomers();
+    if (showAdd) {
+      void loadCustomers();
+      void loadUsers();
+    }
   }, [showAdd]);
 
   const analytics = useMemo(() => {
@@ -85,12 +99,14 @@ export default function CustomerFollowupPage() {
         note: formNote.trim(),
         actionType: formType,
         nextFollowUpAt: formNext || null,
+        assignedToUserId: formAssignedTo || null,
       });
       setShowAdd(false);
       setFormCustomerId('');
       setFormNote('');
       setFormType('call');
       setFormNext('');
+      setFormAssignedTo('');
       await load();
     } catch (e) {
       setError(e?.response?.data?.message || 'Unable to save follow-up.');
@@ -174,6 +190,7 @@ export default function CustomerFollowupPage() {
                 <th className="px-3 py-2">Next follow-up</th>
                 <th className="px-3 py-2">Notes</th>
                 <th className="px-3 py-2">Created by</th>
+                <th className="px-3 py-2">Assigned to</th>
                 <th className="px-3 py-2">Created date</th>
                 <th className="px-3 py-2">Action</th>
               </tr>
@@ -181,7 +198,7 @@ export default function CustomerFollowupPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td className="px-3 py-8 text-center text-slate-500" colSpan={8}>
+                  <td className="px-3 py-8 text-center text-slate-500" colSpan={9}>
                     Loading follow-ups...
                   </td>
                 </tr>
@@ -198,6 +215,7 @@ export default function CustomerFollowupPage() {
                     <td className="px-3 py-2">{row.nextFollowUpDate ? new Date(row.nextFollowUpDate).toLocaleString() : '-'}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{row.notesPreview || '-'}</td>
                     <td className="px-3 py-2">{row.createdBy?.name || row.createdBy?.email || '-'}</td>
+                    <td className="px-3 py-2">{row.assignedTo?.name || row.assignedTo?.email || '-'}</td>
                     <td className="px-3 py-2">{row.createdAt ? new Date(row.createdAt).toLocaleString() : '-'}</td>
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -212,7 +230,7 @@ export default function CustomerFollowupPage() {
                 ))
               ) : (
                 <tr>
-                  <td className="px-3 py-8 text-center text-slate-500" colSpan={8}>
+                  <td className="px-3 py-8 text-center text-slate-500" colSpan={9}>
                     No follow-ups found.
                   </td>
                 </tr>
@@ -237,6 +255,7 @@ export default function CustomerFollowupPage() {
             Next: {selected.nextFollowUpDate ? new Date(selected.nextFollowUpDate).toLocaleString() : '-'}
           </p>
           <p className="text-sm text-slate-700">Created by: {selected.createdBy?.name || selected.createdBy?.email || '-'}</p>
+          <p className="text-sm text-slate-700">Assigned to: {selected.assignedTo?.name || selected.assignedTo?.email || '-'}</p>
           <p className="text-sm text-slate-700">Notes: {selected.notes || '-'}</p>
           <div className="pt-2">
             <button
@@ -290,6 +309,17 @@ export default function CustomerFollowupPage() {
                   <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Next follow-up</label>
                   <input type="datetime-local" className="form-input w-full" value={formNext} onChange={(e) => setFormNext(e.target.value)} />
                 </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Assign to user</label>
+                <select className="form-select w-full" value={formAssignedTo} onChange={(e) => setFormAssignedTo(e.target.value)}>
+                  <option value="">Unassigned</option>
+                  {users.map((u) => (
+                    <option key={u._id} value={u._id}>
+                      {u.name || u.email || 'User'}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" className="btn-secondary" onClick={() => setShowAdd(false)} disabled={saving}>

@@ -7,6 +7,7 @@ import 'package:track/config/app_colors.dart';
 import 'package:track/models/company_visit.dart';
 import 'package:track/screens/attendance/attendance_summary_screen.dart';
 import 'package:track/screens/auth/login_screen.dart';
+import 'package:track/screens/customers/company_customers_screen.dart';
 import 'package:track/screens/dashboard/dashboard_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
 import 'package:track/screens/geo/add_task_screen.dart';
@@ -146,7 +147,8 @@ class _VisitsScreenState extends State<VisitsScreen>
     final Widget target = switch (index) {
       0 => const AttendanceSummaryScreen(),
       1 => const DashboardScreen(),
-      3 => const LeadListScreen(),
+      3 => const CompanyCustomersScreen(),
+      4 => const LeadListScreen(),
       _ => const VisitsScreen(),
     };
     Navigator.pushReplacement(

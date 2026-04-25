@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Customer = require('../models/Customer');
 const CustomerFollowUp = require('../models/CustomerFollowUp');
+const Company = require('../models/Company');
 const User = require('../models/User');
 const { haversineMeters } = require('../utils/haversine');
 const { forwardGeocodeAddress } = require('../services/geocodingService');
@@ -110,6 +111,34 @@ function resolveBusinessIdFromRequest(req) {
   );
 }
 
+async function resolveCompanyAdminContext(businessId) {
+  const out = { companyId: null, adminId: null };
+  const idStr = String(businessId || '').trim();
+  if (!idStr || !mongoose.Types.ObjectId.isValid(idStr) || idStr.length !== 24) return out;
+  const companyId = new mongoose.Types.ObjectId(idStr);
+  out.companyId = companyId;
+  try {
+    const db = Company.db;
+    const modelColl = Company.collection.collectionName;
+    const candidates = [modelColl, 'companies', 'businesses'];
+    const seen = new Set();
+    for (const collName of candidates) {
+      if (!collName || seen.has(collName)) continue;
+      seen.add(collName);
+      try {
+        const doc = await db.collection(collName).findOne({ _id: companyId }, { projection: { adminId: 1 } });
+        if (!doc) continue;
+        const raw = doc.adminId;
+        if (raw && mongoose.Types.ObjectId.isValid(String(raw)) && String(raw).length === 24) {
+          out.adminId = new mongoose.Types.ObjectId(String(raw));
+        }
+        break;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return out;
+}
+
 /**
  * Tenant id on customer may be stored as businessId (app API) or companyId (imports / other clients).
  * companyId is not on the Mongoose schema, so query values must be ObjectId to match BSON ObjectIds.
@@ -168,9 +197,14 @@ exports.createCustomer = async (req, res) => {
     const payload = {
       ...req.body,
       businessId,
+      companyId: null,
+      adminId: null,
       addedBy: addedBy || req.body.addedBy,
       source: 'app',
     };
+    const tenantCtx = await resolveCompanyAdminContext(businessId);
+    payload.companyId = tenantCtx.companyId;
+    payload.adminId = tenantCtx.adminId;
     if (payload.customerNumber != null && String(payload.customerNumber).trim() !== '') {
       payload.customerNumber = normalizeCustomerNumber(payload.customerNumber);
     }
@@ -547,12 +581,15 @@ exports.addCustomerFollowUp = async (req, res) => {
       mongoose.Types.ObjectId.isValid(String(businessId).trim()) && String(businessId).trim().length === 24
         ? new mongoose.Types.ObjectId(String(businessId).trim())
         : businessId;
+    const tenantCtx = await resolveCompanyAdminContext(businessId);
     const row = await CustomerFollowUp.create({
       businessId: bid,
+      companyId: customer.companyId || tenantCtx.companyId || bid,
       customerId: oid,
       note,
       actionType,
       nextFollowUpAt,
+      createdByAdminId: tenantCtx.adminId,
       createdByUserId: req.user._id,
       assignedToUserId: assignee,
     });

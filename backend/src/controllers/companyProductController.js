@@ -14,9 +14,83 @@ function productScopeOrForCompany(companyDocId, partnerSuperAdminId) {
   return { $or: or };
 }
 
+function normalizeObjectIdString(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v.trim();
+  if (typeof v === 'object') {
+    if (v._id) return String(v._id).trim();
+    if (v.id) return String(v.id).trim();
+    if (v.$oid) return String(v.$oid).trim();
+  }
+  return String(v).trim();
+}
+
+async function loadCompanyRawById(companyId) {
+  const idStr = normalizeObjectIdString(companyId);
+  if (!idStr) return null;
+  let oid;
+  try {
+    oid = new mongoose.Types.ObjectId(idStr);
+  } catch (_) {
+    return null;
+  }
+  const db = Company.db;
+  const modelColl = Company.collection.collectionName;
+  const candidates = [modelColl, 'companies', 'businesses'];
+  const seen = new Set();
+  for (const collName of candidates) {
+    if (!collName || seen.has(collName)) continue;
+    seen.add(collName);
+    try {
+      const doc = await db.collection(collName).findOne({ _id: oid });
+      if (doc) return doc;
+    } catch (_) {}
+  }
+  return null;
+}
+
+function pickPartnerIdFromDoc(doc) {
+  if (!doc || typeof doc !== 'object') return '';
+  const candidates = [
+    doc.createdBySuperAdminId,
+    doc.superAdminId,
+    doc.createdByMainSuperAdminId,
+    doc.createdByAdminId,
+  ];
+  for (const c of candidates) {
+    const id = normalizeObjectIdString(c);
+    if (id) return id;
+  }
+  return '';
+}
+
+async function resolvePartnerSuperAdminId(companyRaw, companyDocId) {
+  const direct = pickPartnerIdFromDoc(companyRaw);
+  if (direct) return direct;
+
+  // Fallback: resolve from the company admin account linked to this company.
+  const usersColl = Company.db.collection('users');
+  let companyAdmin = null;
+  const adminId = normalizeObjectIdString(companyRaw?.adminId);
+  if (adminId) {
+    try {
+      companyAdmin = await usersColl.findOne({ _id: new mongoose.Types.ObjectId(adminId) });
+    } catch (_) {}
+  }
+  if (!companyAdmin) {
+    try {
+      companyAdmin = await usersColl.findOne(
+        { companyId: new mongoose.Types.ObjectId(String(companyDocId)), role: { $regex: /admin/i } },
+        { sort: { createdAt: 1 } },
+      );
+    } catch (_) {}
+  }
+  return pickPartnerIdFromDoc(companyAdmin);
+}
+
 async function scopeQueryForUserCompany(companyId) {
-  const co = await Company.findById(companyId).select('createdBySuperAdminId').lean();
-  const partnerId = co?.createdBySuperAdminId;
+  const coRaw = await loadCompanyRawById(companyId);
+  const partnerId = await resolvePartnerSuperAdminId(coRaw, companyId);
   return { ...activeBase(), ...productScopeOrForCompany(companyId, partnerId) };
 }
 

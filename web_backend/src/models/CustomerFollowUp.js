@@ -9,6 +9,7 @@ const customerFollowUpSchema = new mongoose.Schema(
     nextFollowUpAt: { type: Date, default: null, index: true },
     createdByAdminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: true },
     createdByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    assignedToUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     history: {
       type: [
         {
@@ -27,5 +28,6 @@ const customerFollowUpSchema = new mongoose.Schema(
 
 customerFollowUpSchema.index({ companyId: 1, customerId: 1, createdAt: -1 });
 customerFollowUpSchema.index({ companyId: 1, nextFollowUpAt: 1 });
+customerFollowUpSchema.index({ companyId: 1, assignedToUserId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('CustomerFollowUp', customerFollowUpSchema, 'followupCustomer');

@@ -242,130 +242,22 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
       );
       return;
     }
-    var customerId = _customers.first.id ?? '';
-    final noteCtrl = TextEditingController();
-    var actionType = 'call';
-    DateTime? nextAt;
-    var saving = false;
-    String? err;
-
-    await showModalBottomSheet<void>(
+    final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setLocal) {
-            Future<void> submit() async {
-              if (customerId.isEmpty) {
-                setLocal(() => err = 'Select a customer.');
-                return;
-              }
-              if (noteCtrl.text.trim().isEmpty) {
-                setLocal(() => err = 'Note is required.');
-                return;
-              }
-              setLocal(() {
-                saving = true;
-                err = null;
-              });
-              try {
-                await _customerService.addCustomerFollowUp(
-                  customerId: customerId,
-                  note: noteCtrl.text.trim(),
-                  actionType: actionType,
-                  nextFollowUpAt: nextAt,
-                );
-                if (ctx.mounted) Navigator.pop(ctx);
-                await _loadFollowUps();
-              } catch (e) {
-                setLocal(() {
-                  err = e.toString();
-                  saving = false;
-                });
-              }
-            }
-
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 16,
-                right: 16,
-                top: 16,
-                bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('Add customer follow-up', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      value: customerId.isEmpty ? null : customerId,
-                      decoration: const InputDecoration(labelText: 'Customer', border: OutlineInputBorder()),
-                      items: _customers
-                          .where((c) => (c.id ?? '').isNotEmpty)
-                          .map(
-                            (c) => DropdownMenuItem(
-                              value: c.id,
-                              child: Text('${c.customerName} · ${c.companyName ?? ''}', overflow: TextOverflow.ellipsis),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (v) => setLocal(() => customerId = v ?? ''),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: noteCtrl,
-                      decoration: const InputDecoration(labelText: 'Note', border: OutlineInputBorder()),
-                      maxLines: 3,
-                    ),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<String>(
-                      value: actionType,
-                      decoration: const InputDecoration(labelText: 'Type', border: OutlineInputBorder()),
-                      items: const [
-                        DropdownMenuItem(value: 'call', child: Text('Call')),
-                        DropdownMenuItem(value: 'visit', child: Text('Visit')),
-                        DropdownMenuItem(value: 'message', child: Text('Message')),
-                        DropdownMenuItem(value: 'other', child: Text('Other')),
-                      ],
-                      onChanged: (v) => setLocal(() => actionType = v ?? 'call'),
-                    ),
-                    const SizedBox(height: 10),
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(nextAt == null ? 'Next follow-up (optional)' : _fmtDateTime(nextAt)),
-                      trailing: TextButton(onPressed: () async {
-                        final d = await showDatePicker(
-                          context: ctx,
-                          initialDate: DateTime.now(),
-                          firstDate: DateTime.now().subtract(const Duration(days: 1)),
-                          lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-                        );
-                        if (d != null) {
-                          setLocal(() => nextAt = DateTime(d.year, d.month, d.day, 10));
-                        }
-                      }, child: const Text('Pick')),
-                    ),
-                    if (err != null) Text(err!, style: const TextStyle(color: Colors.red)),
-                    const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: saving ? null : submit,
-                      child: Text(saving ? 'Saving…' : 'Save'),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (ctx) => _AddCustomerFollowUpBottomSheet(
+        customerService: _customerService,
+        customers: _customers,
+        fmtDateTime: _fmtDateTime,
+      ),
     );
-    noteCtrl.dispose();
+    if (saved == true && mounted) {
+      await _loadFollowUps();
+    }
   }
 
   Widget _customerCard(Customer c) {
@@ -709,6 +601,186 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
       bottomNavigationBar: OvalBottomNavBar(
         currentIndex: 3,
         onTap: (i) => pushMainShellByIndex(context, i),
+      ),
+    );
+  }
+}
+
+/// Dedicated stateful bottom-sheet avoids `_dependents.isEmpty` assertion seen with
+/// StatefulBuilder + form fields/controller disposal races.
+class _AddCustomerFollowUpBottomSheet extends StatefulWidget {
+  const _AddCustomerFollowUpBottomSheet({
+    required this.customerService,
+    required this.customers,
+    required this.fmtDateTime,
+  });
+
+  final CustomerService customerService;
+  final List<Customer> customers;
+  final String Function(DateTime?) fmtDateTime;
+
+  @override
+  State<_AddCustomerFollowUpBottomSheet> createState() =>
+      _AddCustomerFollowUpBottomSheetState();
+}
+
+class _AddCustomerFollowUpBottomSheetState
+    extends State<_AddCustomerFollowUpBottomSheet> {
+  late final TextEditingController _noteCtrl;
+  late String _customerId;
+  String _actionType = 'call';
+  DateTime? _nextAt;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _noteCtrl = TextEditingController();
+    _customerId = widget.customers.firstWhere(
+      (c) => (c.id ?? '').isNotEmpty,
+      orElse: () => widget.customers.first,
+    ).id ??
+        '';
+  }
+
+  @override
+  void dispose() {
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_customerId.isEmpty) {
+      setState(() => _error = 'Select a customer.');
+      return;
+    }
+    if (_noteCtrl.text.trim().isEmpty) {
+      setState(() => _error = 'Note is required.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.customerService.addCustomerFollowUp(
+        customerId: _customerId,
+        note: _noteCtrl.text.trim(),
+        actionType: _actionType,
+        nextFollowUpAt: _nextAt,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _saving = false;
+      });
+    }
+  }
+
+  Future<void> _pickDate() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
+    );
+    if (d == null || !mounted) return;
+    setState(() => _nextAt = DateTime(d.year, d.month, d.day, 10));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Add customer follow-up',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _customerId.isEmpty ? null : _customerId,
+              decoration: const InputDecoration(
+                labelText: 'Customer',
+                border: OutlineInputBorder(),
+              ),
+              items: widget.customers
+                  .where((c) => (c.id ?? '').isNotEmpty)
+                  .map(
+                    (c) => DropdownMenuItem(
+                      value: c.id,
+                      child: Text(
+                        '${c.customerName} · ${c.companyName ?? ''}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (v) => setState(() => _customerId = v ?? ''),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _noteCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Note',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              value: _actionType,
+              decoration: const InputDecoration(
+                labelText: 'Type',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(value: 'call', child: Text('Call')),
+                DropdownMenuItem(value: 'visit', child: Text('Visit')),
+                DropdownMenuItem(value: 'message', child: Text('Message')),
+                DropdownMenuItem(value: 'other', child: Text('Other')),
+              ],
+              onChanged: (v) => setState(() => _actionType = v ?? 'call'),
+            ),
+            const SizedBox(height: 10),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                _nextAt == null
+                    ? 'Next follow-up (optional)'
+                    : widget.fmtDateTime(_nextAt),
+              ),
+              trailing: TextButton(
+                onPressed: _pickDate,
+                child: const Text('Pick'),
+              ),
+            ),
+            if (_error != null)
+              Text(_error!, style: const TextStyle(color: Colors.red)),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: _saving ? null : _submit,
+              child: Text(_saving ? 'Saving…' : 'Save'),
+            ),
+            const SizedBox(height: 6),
+            TextButton(
+              onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
       ),
     );
   }

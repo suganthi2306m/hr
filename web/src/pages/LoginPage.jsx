@@ -43,7 +43,22 @@ function LoginPage() {
   const [forgotError, setForgotError] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
 
-  const [showSignupCard, setShowSignupCard] = useState(false);
+  const [signupForm, setSignupForm] = useState({
+    companyName: '',
+    email: '',
+    phone: '',
+    planId: '',
+    durationMonths: 12,
+    gateway: 'paysharp',
+  });
+  const [signupPlans, setSignupPlans] = useState([]);
+  const [signupLoadingPlans, setSignupLoadingPlans] = useState(false);
+  const [signupBusy, setSignupBusy] = useState(false);
+  const [signupError, setSignupError] = useState('');
+  const [signupPayment, setSignupPayment] = useState(null);
+  const [signupPaymentState, setSignupPaymentState] = useState('');
+  const [signupPassword, setSignupPassword] = useState('');
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -135,6 +150,98 @@ function LoginPage() {
     }
   };
 
+  const resetSignup = () => {
+    setSignupError('');
+    setSignupPaymentState('');
+    setSignupPayment(null);
+    setSignupPassword('');
+    setSignupConfirmPassword('');
+  };
+
+  const openSignup = async () => {
+    setPanel('signup');
+    resetSignup();
+    setSignupLoadingPlans(true);
+    try {
+      const data = await postPublicAuth('/auth/register/plans', {});
+      const items = Array.isArray(data.items) ? data.items : [];
+      setSignupPlans(items);
+      if (items.length > 0) {
+        setSignupForm((prev) => ({
+          ...prev,
+          planId: prev.planId || items[0]._id,
+          durationMonths: Math.max(1, Number(items[0].durationMonths) || 12),
+        }));
+      }
+    } catch (e) {
+      setSignupError(e.response?.data?.message || 'Could not load plans.');
+    } finally {
+      setSignupLoadingPlans(false);
+    }
+  };
+
+  const startSignupPayment = async (event) => {
+    event.preventDefault();
+    setSignupBusy(true);
+    setSignupError('');
+    setSignupPaymentState('');
+    try {
+      const data = await postPublicAuth('/auth/register/initiate-payment', signupForm);
+      setSignupPayment(data);
+    } catch (e) {
+      setSignupError(e.response?.data?.message || 'Could not start payment.');
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
+  const refreshSignupPayment = async () => {
+    if (!signupPayment?.paymentId) return;
+    setSignupBusy(true);
+    setSignupError('');
+    try {
+      const data = await postPublicAuth(`/auth/register/payments/${encodeURIComponent(signupPayment.paymentId)}/refresh`, {
+        email: signupForm.email,
+      });
+      const status = String(data?.item?.status || '').toLowerCase();
+      if (status === 'captured' || status === 'paid') {
+        setSignupPaymentState('captured');
+      } else if (status === 'failed') {
+        setSignupPaymentState('failed');
+      } else {
+        setSignupPaymentState('pending');
+      }
+    } catch (e) {
+      setSignupError(e.response?.data?.message || 'Could not verify payment status.');
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
+  const completeSignup = async (event) => {
+    event.preventDefault();
+    setSignupBusy(true);
+    setSignupError('');
+    try {
+      await postPublicAuth('/auth/register/complete', {
+        email: signupForm.email,
+        paymentId: signupPayment?.paymentId,
+        password: signupPassword,
+        confirmPassword: signupConfirmPassword,
+      });
+      const response = await login(signupForm.email, signupPassword);
+      if (response.admin?.companySetupCompleted) {
+        navigate('/dashboard');
+      } else {
+        navigate('/company-setup');
+      }
+    } catch (e) {
+      setSignupError(e.response?.data?.message || 'Could not complete account setup.');
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
   return (
     <div
       className="animate-fade-in min-h-screen bg-neutral-900 px-3 py-6 md:px-8 md:py-10"
@@ -145,43 +252,6 @@ function LoginPage() {
         backgroundAttachment: 'fixed',
       }}
     >
-      {showSignupCard && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          role="presentation"
-          onClick={() => setShowSignupCard(false)}
-        >
-          <div
-            role="dialog"
-            aria-labelledby="signup-card-title"
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-flux-sidebar p-6 text-white shadow-panel-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="signup-card-title" className="text-lg font-bold">
-              Contact the LiveTrack team
-            </h2>
-            <p className="mt-2 text-sm text-slate-400">
-              New company accounts are provisioned by our team. Reach us using:
-            </p>
-            <ul className="mt-4 space-y-3 text-sm">
-              <li>
-                <span className="text-slate-500">Email </span>
-                <a className="font-semibold text-primary hover:underline" href="mailto:mcrt@gmail.com">
-                  mcrt@gmail.com
-                </a>
-              </li>
-              <li>
-                <span className="text-slate-500">Phone </span>
-                <a className="font-semibold text-primary hover:underline" href="tel:9876543210">
-                  9876543210
-                </a>
-              </li>
-            </ul>
-            <p className="mt-4 text-xs text-slate-500">Click outside this card to close.</p>
-          </div>
-        </div>
-      )}
-
       <div className="animate-slide-up mx-auto flex min-h-[74vh] w-full max-w-5xl items-center justify-center rounded-[2rem] border border-white/10 bg-white/95 p-1.5 shadow-panel-lg backdrop-blur-sm">
         <section className="hidden h-full w-1/2 rounded-2xl bg-primary p-8 text-dark lg:block">
           <div className="mb-8">
@@ -267,8 +337,8 @@ function LoginPage() {
                 </button>
 
                 <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 pt-2 text-sm">
-                  <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setShowSignupCard(true)}>
-                    Sign up
+                  <button type="button" className="font-semibold text-primary hover:underline" onClick={openSignup}>
+                    Create new account
                   </button>
                   <span className="hidden text-slate-300 sm:inline" aria-hidden>
                     |
@@ -279,7 +349,7 @@ function LoginPage() {
                 </div>
               </form>
             </>
-          ) : (
+          ) : panel === 'forgot' ? (
             <>
               <div className="mb-4 flex items-center gap-3">
                 <img
@@ -400,6 +470,172 @@ function LoginPage() {
                     }}
                   >
                     Back to sign in
+                  </button>
+                </form>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="mb-4 flex items-center gap-3">
+                <img src={logoImg} alt="" width={44} height={44} className="h-11 w-11 rounded-xl object-contain" aria-hidden />
+                <h3 className="text-3xl font-black text-dark">Create new account</h3>
+              </div>
+              <p className="mb-6 text-sm text-slate-500">
+                Enter company details, select a plan, pay, then set your admin password.
+              </p>
+              {signupError && <p className="alert-error mb-3">{signupError}</p>}
+              {!signupPayment ? (
+                <form className="form-stack" onSubmit={startSignupPayment}>
+                  <div className="form-field">
+                    <label htmlFor="signup-company" className="form-label-muted">
+                      Company name
+                    </label>
+                    <input
+                      id="signup-company"
+                      className="form-input"
+                      value={signupForm.companyName}
+                      onChange={(e) => setSignupForm((p) => ({ ...p, companyName: e.target.value }))}
+                      required
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="signup-email" className="form-label-muted">
+                      Email (this will be your admin username)
+                    </label>
+                    <input
+                      id="signup-email"
+                      type="email"
+                      className="form-input"
+                      value={signupForm.email}
+                      onChange={(e) => setSignupForm((p) => ({ ...p, email: e.target.value }))}
+                      required
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="signup-phone" className="form-label-muted">
+                      Phone
+                    </label>
+                    <input
+                      id="signup-phone"
+                      className="form-input"
+                      value={signupForm.phone}
+                      onChange={(e) => setSignupForm((p) => ({ ...p, phone: e.target.value }))}
+                      required
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="signup-plan" className="form-label-muted">
+                      Select plan
+                    </label>
+                    <select
+                      id="signup-plan"
+                      className="form-select"
+                      value={signupForm.planId}
+                      onChange={(e) => setSignupForm((p) => ({ ...p, planId: e.target.value }))}
+                      required
+                      disabled={signupLoadingPlans}
+                    >
+                      {signupPlans.map((p) => (
+                        <option key={p._id} value={p._id}>
+                          {p.name} - INR {p.priceInr} / {p.durationMonths || 12} mo
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="signup-months" className="form-label-muted">
+                      Duration (months)
+                    </label>
+                    <input
+                      id="signup-months"
+                      type="number"
+                      className="form-input"
+                      min={1}
+                      max={120}
+                      value={signupForm.durationMonths}
+                      onChange={(e) => setSignupForm((p) => ({ ...p, durationMonths: Number(e.target.value) || 12 }))}
+                      required
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className={`btn-secondary flex-1 ${signupForm.gateway === 'paysharp' ? 'ring-2 ring-primary/40' : ''}`}
+                      onClick={() => setSignupForm((p) => ({ ...p, gateway: 'paysharp' }))}
+                    >
+                      Paysharp
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn-secondary flex-1 ${signupForm.gateway === 'razorpay' ? 'ring-2 ring-primary/40' : ''}`}
+                      onClick={() => setSignupForm((p) => ({ ...p, gateway: 'razorpay' }))}
+                    >
+                      Razorpay
+                    </button>
+                  </div>
+                  <button type="submit" disabled={signupBusy || signupLoadingPlans} className="btn-primary w-full py-3 disabled:cursor-not-allowed">
+                    {signupBusy ? 'Starting payment...' : 'Proceed to payment'}
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-center text-sm font-semibold text-slate-600 hover:underline"
+                    onClick={() => {
+                      setPanel('login');
+                      resetSignup();
+                    }}
+                  >
+                    Back to sign in
+                  </button>
+                </form>
+              ) : signupPaymentState !== 'captured' ? (
+                <div className="form-stack">
+                  <p className="text-sm text-slate-600">
+                    Plan: <strong>{signupPayment.planName}</strong> | Amount: INR {signupPayment.gatewayAmount || signupPayment.amount}
+                  </p>
+                  <a href={signupPayment.checkoutUrl} target="_blank" rel="noreferrer" className="btn-primary w-full py-3 text-center">
+                    Open payment page
+                  </a>
+                  <button type="button" className="btn-secondary w-full" onClick={refreshSignupPayment} disabled={signupBusy}>
+                    {signupBusy ? 'Checking...' : "I've paid - Check status"}
+                  </button>
+                  {signupPaymentState === 'pending' ? <p className="text-xs text-amber-700">Payment is still pending.</p> : null}
+                  {signupPaymentState === 'failed' ? <p className="text-xs text-red-700">Payment failed. Please retry payment.</p> : null}
+                </div>
+              ) : (
+                <form className="form-stack" onSubmit={completeSignup}>
+                  <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                    Payment captured. Your admin username is <strong>{signupForm.email}</strong>.
+                  </p>
+                  <div className="form-field">
+                    <label htmlFor="signup-password" className="form-label-muted">
+                      Set password
+                    </label>
+                    <input
+                      id="signup-password"
+                      type="password"
+                      className="form-input"
+                      minLength={6}
+                      value={signupPassword}
+                      onChange={(e) => setSignupPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label htmlFor="signup-confirm" className="form-label-muted">
+                      Re-enter password
+                    </label>
+                    <input
+                      id="signup-confirm"
+                      type="password"
+                      className="form-input"
+                      minLength={6}
+                      value={signupConfirmPassword}
+                      onChange={(e) => setSignupConfirmPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <button type="submit" disabled={signupBusy} className="btn-primary w-full py-3 disabled:cursor-not-allowed">
+                    {signupBusy ? 'Creating account...' : 'Submit and go to dashboard'}
                   </button>
                 </form>
               )}

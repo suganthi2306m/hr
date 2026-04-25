@@ -168,6 +168,7 @@ async function getLeadById(req, res, next) {
       .sort({ createdAt: -1 })
       .populate('createdByAdminId', 'name email')
       .populate('createdByUserId', 'name email')
+      .populate('assignedToUserId', 'name email')
       .lean();
     row.followUps = followUps.map((f) => ({
       _id: f._id,
@@ -175,6 +176,7 @@ async function getLeadById(req, res, next) {
       actionType: f.actionType || 'call',
       nextFollowUpAt: f.nextFollowUpAt || null,
       statusAfter: f.statusAfter || null,
+      assignedToUserId: f.assignedToUserId || null,
       createdByAdminId: f.createdByAdminId || null,
       createdByUserId: f.createdByUserId || null,
       createdAt: f.createdAt || null,
@@ -281,6 +283,7 @@ async function addFollowUp(req, res, next) {
       : 'call';
     const nextFollowUpAt = parseDate(req.body.nextFollowUpAt);
     const statusAfter = req.body.statusAfter != null ? normalizeStatus(req.body.statusAfter, row.status) : null;
+    const assignedToUserId = await validateAssignee(company._id, req.body.assignedToUserId);
     const follow = await LeadFollowUp.create({
       companyId: company._id,
       leadId: row._id,
@@ -290,6 +293,7 @@ async function addFollowUp(req, res, next) {
       statusAfter,
       createdByAdminId: req.admin._id,
       createdByUserId: null,
+      assignedToUserId: assignedToUserId || null,
       history: [
         {
           note,
@@ -346,6 +350,9 @@ async function updateFollowUp(req, res, next) {
     if (req.body.actionType != null) {
       const nextType = String(req.body.actionType || '').toLowerCase();
       follow.actionType = ['call', 'visit', 'message', 'other'].includes(nextType) ? nextType : follow.actionType;
+    }
+    if (req.body.assignedToUserId !== undefined) {
+      follow.assignedToUserId = await validateAssignee(company._id, req.body.assignedToUserId);
     }
     if (req.body.nextFollowUpAt !== undefined) follow.nextFollowUpAt = parseDate(req.body.nextFollowUpAt);
     if (req.body.statusAfter !== undefined) follow.statusAfter = req.body.statusAfter == null ? null : normalizeStatus(req.body.statusAfter, row.status);
@@ -409,6 +416,7 @@ async function listFollowUps(req, res, next) {
       .sort(from || to ? { nextFollowUpAt: 1, createdAt: -1 } : { createdAt: -1 })
       .populate('createdByAdminId', 'name email')
       .populate('createdByUserId', 'name email')
+      .populate('assignedToUserId', 'name email')
       .lean();
     const items = rows
       .map((f) => {
@@ -425,6 +433,7 @@ async function listFollowUps(req, res, next) {
           notes: f.note || '',
           notesPreview: String(f.note || '').slice(0, 120),
           createdBy: f.createdByUserId || f.createdByAdminId || null,
+          assignedTo: f.assignedToUserId || null,
           createdAt: f.createdAt || null,
           updatedAt: f.updatedAt || null,
           statusAfter: f.statusAfter || null,

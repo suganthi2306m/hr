@@ -5,6 +5,10 @@ const LEAD_STATUSES = ['new', 'in_progress', 'follow_up', 'won', 'dropped', 'cus
 const leadSchema = new mongoose.Schema(
   {
     businessId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+    /** Mirror key for web admin compatibility (same tenant as businessId). */
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
+    /** Optional owner admin id for cross-surface visibility with web admin tooling. */
+    adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     leadName: { type: String, required: true, trim: true },
     companyName: { type: String, required: true, trim: true },
@@ -77,5 +81,6 @@ const leadSchema = new mongoose.Schema(
 
 leadSchema.index({ businessId: 1, assignedTo: 1, status: 1, createdAt: -1 });
 leadSchema.index({ businessId: 1, 'followUps.nextFollowUpAt': 1, status: 1 });
+leadSchema.index({ companyId: 1, assignedTo: 1, status: 1, createdAt: -1 });
 
 module.exports = { Lead: mongoose.model('Lead', leadSchema), LEAD_STATUSES };

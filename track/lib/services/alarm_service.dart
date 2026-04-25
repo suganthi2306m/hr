@@ -14,7 +14,8 @@ class AlarmService {
   AlarmService._();
 
   /// Shared with [AttendanceAlarmScheduler] scheduled punch reminders.
-  static const String alarmChannelId = 'hrms_alarm_channel';
+  // Bump channel id to avoid previously-created silent channel settings on user devices.
+  static const String alarmChannelId = 'hrms_alarm_channel_v3';
   static const String _kAlarmChannelId = alarmChannelId;
   static const String _kAlarmsPrefsKey = 'hrms_scheduled_alarms';
   static const int _kAlarmNotificationIdBase = 900000; // Avoid collision with FCM ids
@@ -73,6 +74,7 @@ class AlarmService {
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
+        audioAttributesUsage: AudioAttributesUsage.alarm,
       ),
     );
   }

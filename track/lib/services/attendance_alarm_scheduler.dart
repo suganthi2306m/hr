@@ -33,8 +33,108 @@ class AttendanceAlarmScheduler {
 
   static const String _prefsIdsKey = 'attendance_alarm_scheduled_ids_v1';
   static const String _prefsLastRescheduleKey = 'attendance_alarm_last_reschedule_ms';
+  static const String _prefsCachedSettingsKey = 'attendance_alarm_cached_settings_v1';
+  static const String _prefsLastScheduleStatusKey = 'attendance_alarm_last_schedule_status_v1';
   static const int _idBase = 934000;
   static const int _horizonDays = 36;
+
+  /// Exposed for future UI/debug card (status, fallback usage, last success).
+  static Future<Map<String, dynamic>> getLastScheduleStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsLastScheduleStatusKey);
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final m = jsonDecode(raw);
+      if (m is Map<String, dynamic>) return m;
+      if (m is Map) return Map<String, dynamic>.from(m);
+    } catch (_) {}
+    return const {};
+  }
+
+  static Future<void> _saveScheduleStatus(
+    SharedPreferences prefs, {
+    required bool ok,
+    required String source,
+    required bool usedCachedSettings,
+    required int scheduledCount,
+    DateTime? earliest,
+    String? message,
+  }) async {
+    final m = <String, dynamic>{
+      'ok': ok,
+      'source': source,
+      'usedCachedSettings': usedCachedSettings,
+      'scheduledCount': scheduledCount,
+      'earliest': earliest?.toIso8601String(),
+      'message': message ?? '',
+      'updatedAt': DateTime.now().toIso8601String(),
+    };
+    await prefs.setString(_prefsLastScheduleStatusKey, jsonEncode(m));
+  }
+
+  static List<int> _decodeIds(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>?;
+      if (list == null) return const [];
+      return list.map((e) => int.tryParse(e.toString())).whereType<int>().toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<List<int>> _readStoredIds(SharedPreferences prefs) async {
+    return _decodeIds(prefs.getString(_prefsIdsKey));
+  }
+
+  static Future<void> _cancelId(
+    FlutterLocalNotificationsPlugin plugin,
+    int id,
+  ) async {
+    if (_useAndroidAlarmEngine) {
+      await AndroidAlarmManager.cancel(id);
+    }
+    await plugin.cancel(id);
+  }
+
+  static Future<void> _cancelIds(
+    FlutterLocalNotificationsPlugin plugin,
+    Iterable<int> ids,
+  ) async {
+    for (final id in ids) {
+      await _cancelId(plugin, id);
+    }
+  }
+
+  static Future<void> _cacheAlarmSettings(
+    SharedPreferences prefs,
+    AttendanceAlarmSettings settings,
+  ) async {
+    final payload = <String, dynamic>{
+      'savedAt': DateTime.now().toIso8601String(),
+      'settings': settings.toJson(),
+    };
+    await prefs.setString(_prefsCachedSettingsKey, jsonEncode(payload));
+  }
+
+  static AttendanceAlarmSettings? _readCachedAlarmSettings(SharedPreferences prefs) {
+    final raw = prefs.getString(_prefsCachedSettingsKey);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        final s = decoded['settings'];
+        if (s is Map<String, dynamic>) return AttendanceAlarmSettings.fromJson(s);
+        if (s is Map) return AttendanceAlarmSettings.fromJson(Map<String, dynamic>.from(s));
+      } else if (decoded is Map) {
+        final m = Map<String, dynamic>.from(decoded);
+        final s = m['settings'];
+        if (s is Map<String, dynamic>) return AttendanceAlarmSettings.fromJson(s);
+        if (s is Map) return AttendanceAlarmSettings.fromJson(Map<String, dynamic>.from(s));
+      }
+    } catch (_) {}
+    return null;
+  }
 
   static int _stableId(DateTime day, bool checkout) {
     final d = DateDisplayUtil.dateOnlyLocal(day);
@@ -235,25 +335,56 @@ class AttendanceAlarmScheduler {
 
     final att = AttendanceService();
     AttendanceAlarmSettings settings;
+    var usedCachedSettings = false;
     try {
       settings = await att.fetchAttendanceAlarms();
+      await _cacheAlarmSettings(prefs, settings);
     } catch (e) {
-      attendanceAlarmLog('fetchAttendanceAlarms FAILED (abort reschedule): $e');
-      return;
+      final cached = _readCachedAlarmSettings(prefs);
+      if (cached == null) {
+        attendanceAlarmLog('fetchAttendanceAlarms FAILED and no cached settings (keep existing schedule): $e');
+        await _saveScheduleStatus(
+          prefs,
+          ok: false,
+          source: 'none',
+          usedCachedSettings: false,
+          scheduledCount: (await _readStoredIds(prefs)).length,
+          message: 'settings fetch failed and no cache',
+        );
+        return;
+      }
+      settings = cached;
+      usedCachedSettings = true;
+      attendanceAlarmLog('fetchAttendanceAlarms FAILED -> using cached settings: $e');
     }
 
     attendanceAlarmLog(
       'settings in=${settings.checkInEnabled} out=${settings.checkOutEnabled} '
       'inMin=${settings.checkInMinutes} outMin=${settings.checkOutMinutes}',
     );
+    if (usedCachedSettings) {
+      attendanceAlarmLog('offline fallback active: scheduling from cached settings');
+    }
+
+    final oldIds = await _readStoredIds(prefs);
+    final oldSet = oldIds.toSet();
 
     if (!settings.checkInEnabled && !settings.checkOutEnabled) {
-      await cancelScheduled(plugin);
+      await _cancelIds(plugin, oldIds);
+      await prefs.setString(_prefsIdsKey, jsonEncode(const <int>[]));
       await prefs.setInt(
         _prefsLastRescheduleKey,
         DateTime.now().millisecondsSinceEpoch,
       );
       attendanceAlarmLog('both alarms disabled → cancelled & exit');
+      await _saveScheduleStatus(
+        prefs,
+        ok: true,
+        source: usedCachedSettings ? 'cache' : 'server',
+        usedCachedSettings: usedCachedSettings,
+        scheduledCount: 0,
+        message: 'both disabled; cleared existing alarms',
+      );
       return;
     }
 
@@ -266,12 +397,16 @@ class AttendanceAlarmScheduler {
     }
     attendanceAlarmLog('leave rows=${leaves.length}');
 
-    final bundle = await _loadShiftBundle(att);
+    ({WeeklyOffPolicy weekOffPolicy, Map<String, String> holidays}) bundle;
+    try {
+      bundle = await _loadShiftBundle(att);
+    } catch (e) {
+      bundle = (weekOffPolicy: WeeklyOffPolicy.fallbackSatSun(), holidays: const <String, String>{});
+      attendanceAlarmLog('fetchShiftMeta failed, using fallback weekOff Sat/Sun and no holidays: $e');
+    }
     attendanceAlarmLog(
       'shiftMeta weekOffHasRules=${bundle.weekOffPolicy.hasRules} holidayKeys=${bundle.holidays.length}',
     );
-
-    await cancelScheduled(plugin);
 
     final now = DateTime.now();
     final today = DateDisplayUtil.dateOnlyLocal(now);
@@ -300,6 +435,8 @@ class AttendanceAlarmScheduler {
     }
 
     final ids = <int>[];
+    var scheduleAttempts = 0;
+    var scheduleFailures = 0;
     var skippedDays = 0;
     var skippedPast = 0;
     var skippedAlreadyPunched = 0;
@@ -327,6 +464,7 @@ class AttendanceAlarmScheduler {
           final at = _dateWithMinutes(d, settings.checkInMinutes);
           if (at.isAfter(now)) {
             final id = _stableId(d, false);
+            scheduleAttempts++;
             if (_useAndroidAlarmEngine) {
               await _scheduleAndroidOne(
                 id: id,
@@ -345,6 +483,7 @@ class AttendanceAlarmScheduler {
                 idsOut: ids,
               );
             }
+            if (!ids.contains(id)) scheduleFailures++;
             earliest = earliest == null || at.isBefore(earliest) ? at : earliest;
           } else {
             skippedPast++;
@@ -363,6 +502,7 @@ class AttendanceAlarmScheduler {
           final at = _dateWithMinutes(d, settings.checkOutMinutes);
           if (at.isAfter(now)) {
             final id = _stableId(d, true);
+            scheduleAttempts++;
             if (_useAndroidAlarmEngine) {
               await _scheduleAndroidOne(
                 id: id,
@@ -381,6 +521,7 @@ class AttendanceAlarmScheduler {
                 idsOut: ids,
               );
             }
+            if (!ids.contains(id)) scheduleFailures++;
             earliest = earliest == null || at.isBefore(earliest) ? at : earliest;
           } else {
             skippedPast++;
@@ -390,6 +531,30 @@ class AttendanceAlarmScheduler {
           }
         }
       }
+    }
+
+    // Guardrail: if scheduling attempts all failed, preserve previous schedule.
+    if (scheduleAttempts > 0 && ids.isEmpty && scheduleFailures > 0) {
+      attendanceAlarmLog(
+        'WARN: scheduling attempts failed ($scheduleFailures/$scheduleAttempts). Keeping existing schedule unchanged.',
+      );
+      await _saveScheduleStatus(
+        prefs,
+        ok: false,
+        source: usedCachedSettings ? 'cache' : 'server',
+        usedCachedSettings: usedCachedSettings,
+        scheduledCount: oldIds.length,
+        message: 'all scheduling attempts failed; old schedule preserved',
+      );
+      return;
+    }
+
+    // Commit phase: only now cancel stale existing alarms and persist new schedule.
+    final newSet = ids.toSet();
+    final stale = oldSet.difference(newSet);
+    if (stale.isNotEmpty) {
+      await _cancelIds(plugin, stale);
+      attendanceAlarmLog('commit: canceled stale alarms count=${stale.length}');
     }
 
     await prefs.setString(_prefsIdsKey, jsonEncode(ids));
@@ -409,6 +574,17 @@ class AttendanceAlarmScheduler {
         'DONE scheduledIds=${ids.length} earliest=$earliest ids=$ids',
       );
     }
+    await _saveScheduleStatus(
+      prefs,
+      ok: true,
+      source: usedCachedSettings ? 'cache' : 'server',
+      usedCachedSettings: usedCachedSettings,
+      scheduledCount: ids.length,
+      earliest: earliest,
+      message: usedCachedSettings
+          ? 'scheduled from cached settings (offline fallback)'
+          : 'scheduled from server settings',
+    );
   }
 
   static DateTime _dateWithMinutes(DateTime day, int minutes) {

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { Lead, LEAD_STATUSES } = require('../models/Lead');
 const User = require('../models/User');
 const Customer = require('../models/Customer');
+const Company = require('../models/Company');
 
 const FINAL_STATUSES = new Set(['won', 'dropped', 'customer']);
 
@@ -45,6 +46,34 @@ function tenantId(req) {
   return req.user?.companyId || req.user?.businessId || req.companyId || null;
 }
 
+async function resolveCompanyAdminContext(businessId) {
+  const out = { companyId: null, adminId: null };
+  const idStr = String(businessId || '').trim();
+  if (!idStr || !mongoose.Types.ObjectId.isValid(idStr) || idStr.length !== 24) return out;
+  const companyId = new mongoose.Types.ObjectId(idStr);
+  out.companyId = companyId;
+  try {
+    const db = Company.db;
+    const modelColl = Company.collection.collectionName;
+    const candidates = [modelColl, 'companies', 'businesses'];
+    const seen = new Set();
+    for (const collName of candidates) {
+      if (!collName || seen.has(collName)) continue;
+      seen.add(collName);
+      try {
+        const doc = await db.collection(collName).findOne({ _id: companyId }, { projection: { adminId: 1 } });
+        if (!doc) continue;
+        const raw = doc.adminId;
+        if (raw && mongoose.Types.ObjectId.isValid(String(raw)) && String(raw).length === 24) {
+          out.adminId = new mongoose.Types.ObjectId(String(raw));
+        }
+        break;
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return out;
+}
+
 exports.listLeads = async (req, res) => {
   try {
     const businessId = tenantId(req);
@@ -56,8 +85,8 @@ exports.listLeads = async (req, res) => {
       filter.convertedToCustomer = { $ne: true };
       filter.status = { $ne: 'customer' };
     }
-    /** Mobile CRM: only leads assigned to the signed-in user (no company-wide list on app API). */
-    filter.assignedTo = req.user?._id;
+    /** Mobile CRM: show leads created by me OR assigned to me. */
+    filter.$or = [{ assignedTo: req.user?._id }, { createdBy: req.user?._id }];
     const status = normalizeStatus(req.query.status, '');
     if (status) filter.status = status;
     const search = String(req.query.search || '').trim();
@@ -122,8 +151,11 @@ exports.createLead = async (req, res) => {
       if (!assignedTo) assignedTo = req.user._id;
     }
     const status = normalizeStatus(req.body.status, 'new');
+    const tenantCtx = await resolveCompanyAdminContext(businessId);
     const row = await Lead.create({
       businessId,
+      companyId: tenantCtx.companyId,
+      adminId: tenantCtx.adminId,
       createdBy: req.user._id,
       leadName,
       companyName,
@@ -248,6 +280,8 @@ exports.convertLeadToCustomer = async (req, res) => {
       source: 'app',
       addedBy: req.user._id,
       businessId,
+      companyId: row.companyId || businessId,
+      adminId: row.adminId || null,
       geoLocation:
         row.address?.lat != null && row.address?.lng != null
           ? { lat: Number(row.address.lat), lng: Number(row.address.lng) }
@@ -418,7 +452,7 @@ exports.listFollowUps = async (req, res) => {
       businessId,
       convertedToCustomer: { $ne: true },
       status: { $ne: 'customer' },
-      assignedTo: req.user?._id,
+      $or: [{ assignedTo: req.user?._id }, { createdBy: req.user?._id }],
     };
     const status = normalizeStatus(req.query.status, '');
     if (status) leadFilter.status = status;
@@ -430,7 +464,7 @@ exports.listFollowUps = async (req, res) => {
     const from = parseDate(req.query.from);
     const to = parseDate(req.query.to);
     const leads = await Lead.find(leadFilter)
-      .select('leadName companyName status followUps assignedTo')
+      .select('leadName companyName status followUps assignedTo createdBy')
       .populate('followUps.createdByUserId', 'name email')
       .populate('followUps.assignedToUserId', 'name email')
       .lean();
@@ -444,7 +478,8 @@ exports.listFollowUps = async (req, res) => {
         const isMine =
           String(f.createdByUserId?._id || f.createdByUserId || '') === String(req.user?._id || '') ||
           String(f.assignedToUserId?._id || f.assignedToUserId || '') === String(req.user?._id || '') ||
-          String(l.assignedTo || '') === String(req.user?._id || '');
+          String(l.assignedTo || '') === String(req.user?._id || '') ||
+          String(l.createdBy || '') === String(req.user?._id || '');
         if (!isMine) return;
         items.push({
           followUpId: f._id,
@@ -482,9 +517,9 @@ exports.listUpcomingFollowUps = async (req, res) => {
       status: { $ne: 'customer' },
       'followUps.nextFollowUpAt': { $gte: new Date() },
     };
-    filter.assignedTo = req.user._id;
+    filter.$or = [{ assignedTo: req.user._id }, { createdBy: req.user._id }];
     const leads = await Lead.find(filter)
-      .select('leadName companyName status assignedTo followUps')
+      .select('leadName companyName status assignedTo createdBy followUps')
       .populate('assignedTo', 'name email')
       .populate('followUps.assignedToUserId', 'name email')
       .lean();
@@ -493,6 +528,12 @@ exports.listUpcomingFollowUps = async (req, res) => {
     leads.forEach((l) => {
       (l.followUps || []).forEach((f) => {
         if (f.nextFollowUpAt && new Date(f.nextFollowUpAt).getTime() >= now) {
+          const isMine =
+            String(f.createdByUserId?._id || f.createdByUserId || '') === String(req.user?._id || '') ||
+            String(f.assignedToUserId?._id || f.assignedToUserId || '') === String(req.user?._id || '') ||
+            String(l.assignedTo?._id || l.assignedTo || '') === String(req.user?._id || '') ||
+            String(l.createdBy || '') === String(req.user?._id || '');
+          if (!isMine) return;
           items.push({
             leadId: l._id,
             leadName: l.leadName,

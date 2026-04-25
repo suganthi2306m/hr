@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_client.dart';
 import 'alarm_service.dart';
+import 'attendance_alarm_ring_callback.dart';
 import '../config/app_colors.dart';
 import '../screens/geo/my_tasks_screen.dart';
 import '../widgets/notification_reaction_overlay.dart';
@@ -303,6 +304,10 @@ class FcmService {
     await _localNotifications.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (response) {
+        // Also forward alarm action taps (e.g. "Stop") captured on main isolate.
+        if (response.actionId == 'attendance_alarm_stop') {
+          attendanceAlarmNotificationTapBackground(response);
+        }
         if (response.payload != null && response.payload!.isNotEmpty) {
           try {
             final data = jsonDecode(response.payload!) as Map<String, dynamic>?;
@@ -310,6 +315,8 @@ class FcmService {
           } catch (_) {}
         }
       },
+      onDidReceiveBackgroundNotificationResponse:
+          attendanceAlarmNotificationTapBackground,
     );
     if (Platform.isAndroid) {
       await _localNotifications

@@ -480,9 +480,10 @@ class _DashboardScreenState extends State<DashboardScreen>
     final Widget target = switch (index) {
       0 => const AttendanceSummaryScreen(),
       2 => const VisitsScreen(),
-      3 => const LeadListScreen(),
-      4 => const ProfileScreen(),
-      5 => const SettingsScreen(),
+      3 => const CompanyCustomersScreen(),
+      4 => const LeadListScreen(),
+      5 => const ProfileScreen(),
+      6 => const SettingsScreen(),
       _ => const DashboardScreen(),
     };
     Navigator.push(
@@ -568,8 +569,8 @@ class _DashboardScreenState extends State<DashboardScreen>
           ? () => _openAddTask(context)
           : null,
       onAddCustomer: () => _openCreateCustomer(context),
-      onProfile: () => _navigateToIndex(context, 4),
-      onSettings: () => _navigateToIndex(context, 5),
+      onProfile: () => _navigateToIndex(context, 5),
+      onSettings: () => _navigateToIndex(context, 6),
       onLogout: () => _logout(context),
     );
   }
@@ -1126,7 +1127,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         _circleIconButton(
           icon: Icons.person_outline_rounded,
           tooltip: 'Profile',
-          onPressed: () => _navigateToIndex(context, 4),
+          onPressed: () => _navigateToIndex(context, 5),
         ),
       ],
     );
@@ -1216,13 +1217,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                               icon: Icons.person_outline_rounded,
                               selected: false,
                               tooltip: 'Profile',
-                              onTap: () => _navigateToIndex(context, 4),
+                              onTap: () => _navigateToIndex(context, 5),
                             ),
                             _shortcutChip(
                               icon: Icons.settings_outlined,
                               selected: false,
                               tooltip: 'Settings',
-                              onTap: () => _navigateToIndex(context, 5),
+                              onTap: () => _navigateToIndex(context, 6),
                             ),
                           ],
                         ),

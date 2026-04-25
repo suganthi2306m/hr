@@ -3,7 +3,8 @@ class AppConstants {
 
   /// Default app (mobile) API — Render `backend` service.
   /// Override: `flutter run --dart-define=APP_API_BASE_URL=...`
-  static const String _defaultApiBaseUrl ='https://hr-app-tmi3.onrender.com/api';
+  static const String _defaultApiBaseUrl ='http://192.168.1.35:9001/api';
+  //'https://hr-app-tmi3.onrender.com/api';
   //'http://192.168.1.33:9001/api';
      // 'https://hr-app-tmi3.onrender.com/api';
 

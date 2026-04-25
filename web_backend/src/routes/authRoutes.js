@@ -6,6 +6,10 @@ const {
   changePassword,
   requestPasswordOtp,
   resetPasswordWithOtp,
+  listSignupPlans,
+  initiateSelfSignupPayment,
+  refreshSelfSignupPayment,
+  completeSelfSignup,
 } = require('../controllers/authController');
 const auth = require('../middleware/auth');
 const authorizeRole = require('../middleware/authorizeRole');
@@ -23,6 +27,10 @@ const forgotLimiter = rateLimit({
 router.post('/login', login);
 router.post('/forgot-password/request-otp', forgotLimiter, requestPasswordOtp);
 router.post('/forgot-password/reset', forgotLimiter, resetPasswordWithOtp);
+router.post('/register/plans', listSignupPlans);
+router.post('/register/initiate-payment', initiateSelfSignupPayment);
+router.post('/register/payments/:id/refresh', refreshSelfSignupPayment);
+router.post('/register/complete', completeSelfSignup);
 /** Tenant admins and all super-admin variants need profile + password routes. */
 router.get('/me', auth, authorizeRole('admin', 'superadmin', 'mainsuperadmin'), me);
 router.put('/change-password', auth, authorizeRole('admin', 'superadmin', 'mainsuperadmin'), changePassword);

@@ -26,6 +26,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   Map<String, dynamic>? _user;
   bool _loading = true;
+  bool _savingPersonal = false;
 
   @override
   void initState() {
@@ -95,36 +96,332 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return s.isEmpty ? null : s;
   }
 
-  List<MapEntry<String, String>> _detailRows(Map<String, dynamic>? u) {
-    if (u == null) return const [];
-    final rows = <MapEntry<String, String>>[];
-
-    void add(String label, String? value) {
-      if (value != null) rows.add(MapEntry(label, value));
+  String? _valueByPaths(
+    Map<String, dynamic>? source,
+    List<String> paths,
+  ) {
+    if (source == null) return null;
+    for (final path in paths) {
+      dynamic current = source;
+      var missing = false;
+      for (final part in path.split('.')) {
+        if (current is Map && current.containsKey(part)) {
+          current = current[part];
+        } else {
+          missing = true;
+          break;
+        }
+      }
+      if (missing) continue;
+      final t = _trimmed(current);
+      if (t != null) return t;
     }
+    return null;
+  }
 
-    add('Name', _trimmed(u['name'] ?? u['fullName']));
-    add('Email', _trimmed(u['email']));
-    add('Phone', _trimmed(u['phone'] ?? u['mobile'] ?? u['phoneNumber']));
-    add('Role', _trimmed(u['role']));
+  List<_ProfileItem> _buildWorkItems(Map<String, dynamic>? u) {
+    return [
+      _ProfileItem('Role', _valueByPaths(u, ['role'])),
+      _ProfileItem('Department', _valueByPaths(u, ['department'])),
+      _ProfileItem(
+        'Designation',
+        _valueByPaths(u, ['designation', 'jobTitle', 'title']),
+      ),
+      _ProfileItem('Employee ID', _valueByPaths(u, ['employeeId', 'empId', 'employeeCode'])),
+      _ProfileItem('Work shift', _valueByPaths(u, ['workShift', 'shiftName', 'shift.name'])),
+      _ProfileItem('Date of joining', _valueByPaths(u, ['dateOfJoining', 'joiningDate'])),
+      _ProfileItem('Employment type', _valueByPaths(u, ['employmentType'])),
+      _ProfileItem('Reporting manager', _valueByPaths(u, ['reportingManagerName', 'reportingManager.name'])),
+    ];
+  }
 
-    String? company = _trimmed(u['companyName']);
-    if (company == null && u['company'] is Map) {
-      final c = Map<String, dynamic>.from(u['company'] as Map);
-      company = _trimmed(c['name']);
-    }
-    add('Company', company);
+  List<_ProfileItem> _buildContactItems(Map<String, dynamic>? u) {
+    return [
+      _ProfileItem('Work phone', _valueByPaths(u, ['phone', 'mobile', 'phoneNumber'])),
+      _ProfileItem('Personal mobile', _valueByPaths(u, ['personalMobile', 'personalPhone'])),
+      _ProfileItem('Personal email', _valueByPaths(u, ['personalEmail'])),
+      _ProfileItem('Emergency contact', _valueByPaths(u, ['emergencyContact'])),
+      _ProfileItem('Permanent address', _valueByPaths(u, ['permanentAddress', 'address', 'streetAddress'])),
+      _ProfileItem('Local address', _valueByPaths(u, ['localAddress'])),
+      _ProfileItem('City', _valueByPaths(u, ['city'])),
+      _ProfileItem('State', _valueByPaths(u, ['state', 'region'])),
+      _ProfileItem('PIN code', _valueByPaths(u, ['pincode', 'postalCode', 'zipCode'])),
+    ];
+  }
 
-    add('Company ID', _trimmed(u['companyId'] ?? u['businessId']));
-    add('Employee ID', _trimmed(u['employeeId'] ?? u['empId'] ?? u['employeeCode']));
-    add('Department', _trimmed(u['department']));
-    add('Designation', _trimmed(u['designation'] ?? u['jobTitle'] ?? u['title']));
-    add('Address', _trimmed(u['address'] ?? u['streetAddress']));
-    add('City', _trimmed(u['city']));
-    add('State', _trimmed(u['state'] ?? u['region']));
-    add('PIN code', _trimmed(u['pincode'] ?? u['postalCode'] ?? u['zipCode']));
+  List<_ProfileItem> _buildPersonalItems(Map<String, dynamic>? u) {
+    return [
+      _ProfileItem('First name', _valueByPaths(u, ['firstName'])),
+      _ProfileItem('Last name', _valueByPaths(u, ['lastName'])),
+      _ProfileItem('Date of birth', _valueByPaths(u, ['dateOfBirth', 'dob'])),
+      _ProfileItem('Gender', _valueByPaths(u, ['gender'])),
+      _ProfileItem('Marital status', _valueByPaths(u, ['maritalStatus'])),
+      _ProfileItem('Nationality', _valueByPaths(u, ['nationality'])),
+      _ProfileItem('Blood group', _valueByPaths(u, ['bloodGroup'])),
+    ];
+  }
 
-    return rows;
+  List<_ProfileItem> _buildBankItems(Map<String, dynamic>? u) {
+    return [
+      _ProfileItem('Payment mode', _valueByPaths(u, ['paymentMode'])),
+      _ProfileItem('Bank', _valueByPaths(u, ['bankName'])),
+      _ProfileItem('Account number', _valueByPaths(u, ['accountNumber'])),
+      _ProfileItem('IFSC', _valueByPaths(u, ['ifscCode'])),
+      _ProfileItem('Branch', _valueByPaths(u, ['branchName'])),
+      _ProfileItem('Beneficiary code', _valueByPaths(u, ['beneficiaryCode'])),
+    ];
+  }
+
+  List<_ProfileItem> _buildIdentityItems(Map<String, dynamic>? u) {
+    return [
+      _ProfileItem('PAN', _valueByPaths(u, ['pan'])),
+      _ProfileItem('Aadhaar', _valueByPaths(u, ['aadhaar'])),
+      _ProfileItem('UAN', _valueByPaths(u, ['uan'])),
+      _ProfileItem('PF number', _valueByPaths(u, ['pfNumber'])),
+    ];
+  }
+
+  Future<void> _showPersonalEditSheet() async {
+    final u = _user ?? const <String, dynamic>{};
+    final phoneCtrl = TextEditingController(
+      text: _valueByPaths(u, ['phone', 'mobile', 'phoneNumber']) ?? '',
+    );
+    final personalEmailCtrl = TextEditingController(
+      text: _valueByPaths(u, ['personalEmail']) ?? '',
+    );
+    final emergencyCtrl = TextEditingController(
+      text: _valueByPaths(u, ['emergencyContact']) ?? '',
+    );
+    final permanentAddressCtrl = TextEditingController(
+      text: _valueByPaths(u, ['permanentAddress', 'address', 'streetAddress']) ?? '',
+    );
+    final localAddressCtrl = TextEditingController(
+      text: _valueByPaths(u, ['localAddress']) ?? '',
+    );
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            Future<void> save() async {
+              setModalState(() => _savingPersonal = true);
+              final payload = <String, dynamic>{
+                'phone': phoneCtrl.text.trim(),
+                'personalEmail': personalEmailCtrl.text.trim(),
+                'emergencyContact': emergencyCtrl.text.trim(),
+                'permanentAddress': permanentAddressCtrl.text.trim(),
+                'localAddress': localAddressCtrl.text.trim(),
+              };
+              payload.removeWhere((_, value) => value.toString().trim().isEmpty);
+              final res = await AuthService().updateProfile(payload);
+              if (!mounted || !ctx.mounted) return;
+              setModalState(() => _savingPersonal = false);
+              if (res['success'] == true) {
+                Navigator.of(ctx).pop();
+                AppFeedback.success(context, 'Personal details updated');
+                await _loadProfile();
+              } else {
+                AppFeedback.error(
+                  context,
+                  res['message']?.toString() ?? 'Failed to update details',
+                );
+              }
+            }
+
+            InputDecoration deco(String label, {IconData? icon}) => InputDecoration(
+              labelText: label,
+              prefixIcon: icon == null ? null : Icon(icon, size: 20),
+              filled: true,
+              fillColor: const Color(0xFFF7F7F8),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            );
+
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                14,
+                16,
+                MediaQuery.of(ctx).viewInsets.bottom + 16,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Edit personal details',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: deco('Phone', icon: Icons.call_outlined),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: personalEmailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: deco('Personal email', icon: Icons.mail_outline),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: emergencyCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: deco('Emergency contact', icon: Icons.contact_phone_outlined),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: permanentAddressCtrl,
+                      maxLines: 2,
+                      decoration: deco('Permanent address'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: localAddressCtrl,
+                      maxLines: 2,
+                      decoration: deco('Local address'),
+                    ),
+                    const SizedBox(height: 14),
+                    FilledButton(
+                      onPressed: _savingPersonal ? null : save,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.black87,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: _savingPersonal
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text(
+                              'Save',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    phoneCtrl.dispose();
+    personalEmailCtrl.dispose();
+    emergencyCtrl.dispose();
+    permanentAddressCtrl.dispose();
+    localAddressCtrl.dispose();
+  }
+
+  Widget _buildSectionCard({
+    required String title,
+    required List<_ProfileItem> items,
+    bool editable = false,
+    VoidCallback? onEdit,
+    String? subtitle,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                if (editable && onEdit != null)
+                  TextButton.icon(
+                    onPressed: onEdit,
+                    icon: const Icon(Icons.edit_outlined, size: 16),
+                    label: const Text('Edit'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.black87,
+                    ),
+                  ),
+              ],
+            ),
+            if (subtitle != null && subtitle.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.black.withValues(alpha: 0.55),
+                  ),
+                ),
+              ),
+            if (items.where((e) => e.hasValue).isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Text(
+                  'No details available',
+                  style: TextStyle(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              )
+            else
+              ...items.where((e) => e.hasValue).map(
+                (item) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 130,
+                        child: Text(
+                          item.label,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black.withValues(alpha: 0.5),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          item.value!,
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _showChangePasswordDialog() async {
@@ -235,7 +532,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ? u!['name'].toString().trim()
         : (u?['fullName']?.toString().trim().isNotEmpty == true ? u!['fullName'].toString().trim() : 'User');
     final subtitle = _trimmed(u?['email']) ?? _trimmed(u?['role']) ?? '';
-    final details = _detailRows(u);
+    final workItems = _buildWorkItems(u);
+    final contactItems = _buildContactItems(u);
+    final personalItems = _buildPersonalItems(u);
+    final bankItems = _buildBankItems(u);
+    final identityItems = _buildIdentityItems(u);
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -310,70 +611,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                       ],
                       const SizedBox(height: 24),
-                      Text(
-                        'Your details',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.black.withValues(alpha: 0.88),
-                        ),
+                      _buildSectionCard(
+                        title: 'Work information',
+                        subtitle: 'Role and department are managed by your admin.',
+                        items: workItems,
                       ),
-                      const SizedBox(height: 10),
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
-                        ),
-                        child: details.isEmpty
-                            ? const Padding(
-                                padding: EdgeInsets.all(20),
-                                child: Text('No profile details available.'),
-                              )
-                            : ListView.separated(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                itemCount: details.length,
-                                separatorBuilder: (_, __) => Divider(
-                                  height: 1,
-                                  thickness: 1,
-                                  color: Colors.black.withValues(alpha: 0.06),
-                                ),
-                                itemBuilder: (context, i) {
-                                  final e = details[i];
-                                  final label = e.key;
-                                  final value = e.value;
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                    child: Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        SizedBox(
-                                          width: 112,
-                                          child: Text(
-                                            label,
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 13,
-                                              color: Colors.black.withValues(alpha: 0.5),
-                                            ),
-                                          ),
-                                        ),
-                                        Expanded(
-                                          child: SelectableText(
-                                            value,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                              fontSize: 14,
-                                              color: Colors.black87,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
+                      const SizedBox(height: 12),
+                      _buildSectionCard(
+                        title: 'Contact',
+                        items: contactItems,
+                        editable: true,
+                        onEdit: _showPersonalEditSheet,
+                      ),
+                      const SizedBox(height: 12),
+                      _buildSectionCard(
+                        title: 'Personal',
+                        items: personalItems,
+                        editable: true,
+                        onEdit: _showPersonalEditSheet,
+                      ),
+                      const SizedBox(height: 12),
+                      _buildSectionCard(
+                        title: 'Bank',
+                        items: bankItems,
+                      ),
+                      const SizedBox(height: 12),
+                      _buildSectionCard(
+                        title: 'Identity',
+                        items: identityItems,
                       ),
                       const SizedBox(height: 20),
                       _PasswordUpdateCard(onTap: _showChangePasswordDialog),
@@ -786,4 +1051,13 @@ class _ProfileMenuCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ProfileItem {
+  const _ProfileItem(this.label, this.value);
+
+  final String label;
+  final String? value;
+
+  bool get hasValue => value != null && value!.trim().isNotEmpty;
 }

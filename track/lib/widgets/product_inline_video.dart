@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:track/config/constants.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
 const _kInk = Color(0xFF1A1A1A);
 
@@ -69,6 +70,7 @@ enum _EmbedKind { none, youtube, file, externalOnly }
 class _ProductInlineVideoState extends State<ProductInlineVideo> {
   _EmbedKind _kind = _EmbedKind.none;
   WebViewController? _controller;
+  YoutubePlayerController? _youtubeController;
   String _resolved = '';
 
   @override
@@ -82,12 +84,17 @@ class _ProductInlineVideoState extends State<ProductInlineVideo> {
     final yt = _youtubeVideoIdFromUrl(_resolved);
     if (yt != null) {
       _kind = _EmbedKind.youtube;
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(Colors.black)
-        ..loadRequest(
-          Uri.parse('https://www.youtube-nocookie.com/embed/$yt?playsinline=1'),
-        );
+      _youtubeController = YoutubePlayerController.fromVideoId(
+        videoId: yt,
+        autoPlay: false,
+        params: const YoutubePlayerParams(
+          showControls: true,
+          showFullscreenButton: true,
+          strictRelatedVideos: true,
+          enableJavaScript: true,
+          playsInline: true,
+        ),
+      );
       return;
     }
     if (_isDirectVideoFileUrl(_resolved)) {
@@ -107,11 +114,29 @@ class _ProductInlineVideoState extends State<ProductInlineVideo> {
   }
 
   @override
+  void dispose() {
+    _youtubeController?.close();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     switch (_kind) {
       case _EmbedKind.none:
         return const SizedBox.shrink();
       case _EmbedKind.youtube:
+        final yc = _youtubeController;
+        if (yc == null) return const SizedBox.shrink();
+        return AspectRatio(
+          aspectRatio: 16 / 9,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: YoutubePlayerScaffold(
+              controller: yc,
+              builder: (context, player) => player,
+            ),
+          ),
+        );
       case _EmbedKind.file:
         final c = _controller;
         if (c == null) return const SizedBox.shrink();

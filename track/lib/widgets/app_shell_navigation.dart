@@ -228,6 +228,11 @@ class OvalBottomNavBar extends StatelessWidget {
                 activeIcon: Icon(Icons.storefront_rounded),
                 label: 'Visits',
               ),
+              const BottomNavigationBarItem(
+                icon: Icon(Icons.groups_outlined),
+                activeIcon: Icon(Icons.groups_rounded),
+                label: 'Customers',
+              ),
               BottomNavigationBarItem(
                 icon: TaskBrandIcon(
                   size: 22,
@@ -258,7 +263,7 @@ mixin MainShellSwipeNavigation<T extends StatefulWidget> on State<T> {
     // Positive velocity = swipe right -> move backward in shell tabs.
     if (velocity < 0) {
       final next = currentIndex + 1;
-      if (next <= 3 && mounted) {
+      if (next <= 4 && mounted) {
         pushMainShellByIndex(context, next);
       }
       return;

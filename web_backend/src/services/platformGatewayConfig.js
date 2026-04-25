@@ -151,12 +151,19 @@ async function getPaysharpConfig(opts = {}) {
     const adm = await Admin.findById(billingAdminId).select('paymentIntegrations role').lean();
     if (adm) {
       const p = adm.paymentIntegrations?.paysharp || {};
-      const apiKeyFromDb = readPlainFromDoc({ paysharp: p }, 'paysharp.apiKey');
-      if (String(apiKeyFromDb || '').trim()) {
-        return assemblePaysharpConfig(p, { useEnvToken: false, partnerOnly: false });
-      }
       if (adm.role === 'superadmin') {
         return assemblePaysharpConfig(p, { useEnvToken: false, partnerOnly: true });
+      }
+      const hasScopedConfig =
+        Boolean(p && typeof p === 'object') &&
+        (p.enabled !== undefined ||
+          p.useSandbox !== undefined ||
+          String(p.merchantId || '').trim() ||
+          String(p.apiBaseUrl || '').trim() ||
+          String(readPlainFromDoc({ paysharp: p }, 'paysharp.webhookSecret') || '').trim() ||
+          String(readPlainFromDoc({ paysharp: p }, 'paysharp.apiKey') || '').trim());
+      if (adm.role === 'mainsuperadmin' && hasScopedConfig) {
+        return assemblePaysharpConfig(p, { useEnvToken: true, partnerOnly: false });
       }
     }
   }

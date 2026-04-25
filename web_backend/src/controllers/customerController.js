@@ -412,10 +412,24 @@ async function listCustomerFollowUps(req, res, next) {
     if (!company?._id) return res.status(400).json({ message: 'Complete company setup to manage customers.' });
     const cust = await Customer.findOne({ _id: req.params.id, companyId: company._id }).select('_id').lean();
     if (!cust) return res.status(404).json({ message: 'Customer not found.' });
-    const items = await CustomerFollowUp.find({ companyId: company._id, customerId: cust._id })
+    const q = { companyId: company._id, customerId: cust._id };
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      q.note = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    }
+    const from = parseFollowupRangeDate(req.query.from);
+    const to = parseFollowupRangeDate(req.query.to);
+    if (from || to) {
+      q.createdAt = {};
+      if (from) q.createdAt.$gte = followupStartOfDay(from);
+      if (to) q.createdAt.$lte = followupEndOfDay(to);
+    }
+
+    const items = await CustomerFollowUp.find(q)
       .sort({ createdAt: -1 })
       .populate('createdByAdminId', 'name email')
       .populate('createdByUserId', 'name email')
+      .populate('assignedToUserId', 'name email')
       .lean();
     return res.json({ items });
   } catch (error) {
@@ -439,6 +453,13 @@ function followupEndOfDay(d) {
   const x = new Date(d);
   x.setHours(23, 59, 59, 999);
   return x;
+}
+
+async function validateAssignee(companyId, userId) {
+  const id = String(userId || '').trim();
+  if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
+  const row = await mongoose.model('User').findOne({ _id: id, companyId }).select('_id').lean();
+  return row ? row._id : null;
 }
 
 /** All company customer follow-ups (for Track → Customers → Follow-up). */
@@ -477,6 +498,7 @@ async function listAllCustomerFollowUps(req, res, next) {
       .sort(from || to ? { nextFollowUpAt: 1, createdAt: -1 } : { createdAt: -1 })
       .populate('createdByAdminId', 'name email')
       .populate('createdByUserId', 'name email')
+      .populate('assignedToUserId', 'name email')
       .lean();
 
     const items = rows
@@ -493,6 +515,7 @@ async function listAllCustomerFollowUps(req, res, next) {
           notes: f.note || '',
           notesPreview: String(f.note || '').slice(0, 120),
           createdBy: f.createdByUserId || f.createdByAdminId || null,
+          assignedTo: f.assignedToUserId || null,
           createdAt: f.createdAt || null,
           updatedAt: f.updatedAt || null,
           history: Array.isArray(f.history) ? f.history : [],
@@ -518,6 +541,11 @@ async function addCustomerFollowUp(req, res, next) {
       ? String(req.body.actionType).toLowerCase()
       : 'call';
     const nextFollowUpAt = req.body.nextFollowUpAt ? new Date(req.body.nextFollowUpAt) : null;
+    let assignee = null;
+    if (req.body.assignedToUserId != null && String(req.body.assignedToUserId).trim()) {
+      assignee = await validateAssignee(company._id, req.body.assignedToUserId);
+      if (!assignee) return res.status(400).json({ message: 'Assigned user is invalid.' });
+    }
     const row = await CustomerFollowUp.create({
       companyId: company._id,
       customerId: cust._id,
@@ -526,6 +554,7 @@ async function addCustomerFollowUp(req, res, next) {
       nextFollowUpAt: nextFollowUpAt && !Number.isNaN(nextFollowUpAt.getTime()) ? nextFollowUpAt : null,
       createdByAdminId: req.admin._id,
       createdByUserId: null,
+      assignedToUserId: assignee,
       history: [{ note, actionType, nextFollowUpAt, changedByAdminId: req.admin._id, changedAt: new Date() }],
     });
     return res.status(201).json({ item: row });
@@ -552,6 +581,11 @@ async function addCustomerFollowUpFromBody(req, res, next) {
       ? String(req.body.actionType).toLowerCase()
       : 'call';
     const nextFollowUpAt = req.body.nextFollowUpAt ? new Date(req.body.nextFollowUpAt) : null;
+    let assignee = null;
+    if (req.body.assignedToUserId != null && String(req.body.assignedToUserId).trim()) {
+      assignee = await validateAssignee(company._id, req.body.assignedToUserId);
+      if (!assignee) return res.status(400).json({ message: 'Assigned user is invalid.' });
+    }
     const row = await CustomerFollowUp.create({
       companyId: company._id,
       customerId: cust._id,
@@ -560,6 +594,7 @@ async function addCustomerFollowUpFromBody(req, res, next) {
       nextFollowUpAt: nextFollowUpAt && !Number.isNaN(nextFollowUpAt.getTime()) ? nextFollowUpAt : null,
       createdByAdminId: req.admin._id,
       createdByUserId: null,
+      assignedToUserId: assignee,
       history: [{ note, actionType, nextFollowUpAt, changedByAdminId: req.admin._id, changedAt: new Date() }],
     });
     return res.status(201).json({ item: row });

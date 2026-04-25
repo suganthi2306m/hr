@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
@@ -57,6 +59,7 @@ class _AttendanceAlarmSheetBodyState extends State<_AttendanceAlarmSheetBody> {
   /// 0 = check-in, 1 = check-out (which time the wheel edits).
   int _segment = 0;
   bool _saving = false;
+  Map<String, dynamic> _scheduleStatus = const {};
 
   static DateTime _fromMinutes(int m) {
     final h = (m ~/ 60) % 24;
@@ -76,6 +79,13 @@ class _AttendanceAlarmSheetBodyState extends State<_AttendanceAlarmSheetBody> {
     _outEnabled = s.checkOutEnabled;
     _checkInDt = _fromMinutes(s.checkInMinutes);
     _checkOutDt = _fromMinutes(s.checkOutMinutes);
+    unawaited(_loadScheduleStatus());
+  }
+
+  Future<void> _loadScheduleStatus() async {
+    final status = await AttendanceAlarmScheduler.getLastScheduleStatus();
+    if (!mounted) return;
+    setState(() => _scheduleStatus = status);
   }
 
   void _onWheelChanged(DateTime d) {
@@ -108,6 +118,7 @@ class _AttendanceAlarmSheetBodyState extends State<_AttendanceAlarmSheetBody> {
       attendanceAlarmLog('sheet server save OK → rescheduleFromServer(force:true)');
       await AttendanceAlarmScheduler.rescheduleFromServer(force: true);
       attendanceAlarmLog('sheet reschedule returned');
+      await _loadScheduleStatus();
       if (!mounted) return;
       Navigator.pop(context);
       AppFeedback.success(context, 'Alarms saved');
@@ -158,6 +169,10 @@ class _AttendanceAlarmSheetBodyState extends State<_AttendanceAlarmSheetBody> {
                 color: ink.withValues(alpha: 0.55),
               ),
             ),
+            if (_scheduleStatus.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _buildScheduleStatusChip(ink),
+            ],
             const SizedBox(height: 16),
             _alarmToggleRow(
               label: 'Check-in reminder',
@@ -258,6 +273,39 @@ class _AttendanceAlarmSheetBodyState extends State<_AttendanceAlarmSheetBody> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScheduleStatusChip(Color ink) {
+    final ok = _scheduleStatus['ok'] == true;
+    final usedFallback = _scheduleStatus['usedCachedSettings'] == true;
+    final count = _scheduleStatus['scheduledCount'];
+    final msg = (_scheduleStatus['message'] ?? '').toString().trim();
+    final source = (_scheduleStatus['source'] ?? '').toString().trim();
+    final updatedAt = (_scheduleStatus['updatedAt'] ?? '').toString().trim();
+    String line = ok ? 'Last schedule OK' : 'Last schedule failed';
+    if (count.toString().isNotEmpty) line += ' • alarms: $count';
+    if (source.isNotEmpty) line += ' • source: $source';
+    if (usedFallback) line += ' • offline fallback used';
+    if (updatedAt.isNotEmpty) line += ' • ${updatedAt.replaceFirst('T', ' ').split('.').first}';
+    final details = msg.isNotEmpty ? msg : line;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: ok ? const Color(0xFFEFFAF2) : const Color(0xFFFFF4E5),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: ok ? const Color(0xFFBFE6C8) : const Color(0xFFF7D39B)),
+      ),
+      child: Text(
+        details,
+        style: TextStyle(
+          fontSize: 12,
+          height: 1.3,
+          fontWeight: FontWeight.w600,
+          color: ok ? const Color(0xFF1D6B2B) : ink.withValues(alpha: 0.8),
         ),
       ),
     );

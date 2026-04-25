@@ -20,6 +20,10 @@ function formatDay(iso) {
   return d.toLocaleDateString(undefined, { dateStyle: 'medium' });
 }
 
+function isLikelyObjectId(value) {
+  return /^[a-f0-9]{24}$/i.test(String(value || '').trim());
+}
+
 function durationLabel(row) {
   if (row.durationMinutes != null && Number.isFinite(Number(row.durationMinutes))) {
     return `${row.durationMinutes} min`;
@@ -56,14 +60,22 @@ export default function CustomerDetailPage() {
   const [followNote, setFollowNote] = useState('');
   const [followType, setFollowType] = useState('call');
   const [followDate, setFollowDate] = useState('');
+  const [followAssignedTo, setFollowAssignedTo] = useState('');
+  const [followQuery, setFollowQuery] = useState('');
+  const [followFrom, setFollowFrom] = useState('');
+  const [followTo, setFollowTo] = useState('');
   const [followSaving, setFollowSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [visitsLoading, setVisitsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const title = useMemo(() => {
-    const c = customer?.companyName?.trim() || customer?.customerName?.trim();
-    return c || 'Customer';
+    const customerName = String(customer?.customerName || '').trim();
+    const companyName = String(customer?.companyName || '').trim();
+    if (customerName && !isLikelyObjectId(customerName)) return customerName;
+    if (companyName && !isLikelyObjectId(companyName)) return companyName;
+    if (customerName) return customerName;
+    return 'Customer';
   }, [customer]);
 
   const userFilterOptions = useMemo(() => {
@@ -96,12 +108,16 @@ export default function CustomerDetailPage() {
   const loadCustomerFollowUps = useCallback(async () => {
     if (!customerId) return;
     try {
-      const { data } = await apiClient.get(`/customers/${customerId}/followups`);
+      const params = {};
+      if (followQuery.trim()) params.search = followQuery.trim();
+      if (followFrom) params.from = followFrom;
+      if (followTo) params.to = followTo;
+      const { data } = await apiClient.get(`/customers/${customerId}/followups`, { params });
       setCustomerFollowUps(Array.isArray(data?.items) ? data.items : []);
     } catch {
       setCustomerFollowUps([]);
     }
-  }, [customerId]);
+  }, [customerId, followFrom, followQuery, followTo]);
 
   const loadVisits = useCallback(async () => {
     if (!customerId) return;
@@ -156,8 +172,8 @@ export default function CustomerDetailPage() {
   }, [loadCustomer]);
 
   useEffect(() => {
-    void loadCustomerFollowUps();
-  }, [loadCustomerFollowUps]);
+    if (tab === 'followup') void loadCustomerFollowUps();
+  }, [loadCustomerFollowUps, tab]);
 
   useEffect(() => {
     if (tab === 'visits') void loadVisits();
@@ -192,9 +208,11 @@ export default function CustomerDetailPage() {
         note,
         actionType: followType,
         nextFollowUpAt: followDate || null,
+        assignedToUserId: followAssignedTo || null,
       });
       setFollowNote('');
       setFollowDate('');
+      setFollowAssignedTo('');
       await loadCustomerFollowUps();
     } catch (e) {
       setError(e?.response?.data?.message || 'Could not add customer follow-up.');
@@ -245,50 +263,122 @@ export default function CustomerDetailPage() {
         >
           Visits
         </button>
+        <button
+          type="button"
+          onClick={() => setTab('followup')}
+          className={clsx(
+            'rounded-full px-4 py-2 text-sm font-semibold transition',
+            tab === 'followup' ? 'bg-primary text-dark shadow-sm' : 'text-slate-600 hover:bg-neutral-100',
+          )}
+        >
+          Follow-up
+        </button>
       </div>
 
-      <div className="flux-card space-y-4 rounded-2xl border border-neutral-200 bg-white p-4 shadow-panel-lg">
-        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Visits — user and date</p>
-        <p className="-mt-2 text-xs text-slate-500">Filters apply when you open the Visits tab.</p>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="form-field">
-            <label className="form-label-muted" htmlFor="cust-detail-visit-user">
-              User
-            </label>
-            <UiSelect
-              id="cust-detail-visit-user"
-              value={visitUserId}
-              onChange={setVisitUserId}
-              options={userFilterOptions}
-              searchable
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label-muted" htmlFor="cust-detail-visit-from">
-              From date
-            </label>
-            <input
-              id="cust-detail-visit-from"
-              type="date"
-              className="form-input"
-              value={visitDateFrom}
-              onChange={(e) => setVisitDateFrom(e.target.value)}
-            />
-          </div>
-          <div className="form-field">
-            <label className="form-label-muted" htmlFor="cust-detail-visit-to">
-              To date
-            </label>
-            <input
-              id="cust-detail-visit-to"
-              type="date"
-              className="form-input"
-              value={visitDateTo}
-              onChange={(e) => setVisitDateTo(e.target.value)}
-            />
+      {tab === 'visits' && (
+        <div className="flux-card space-y-4 rounded-2xl border border-neutral-200 bg-white p-4 shadow-panel-lg">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Visits — user and date</p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="form-field">
+              <label className="form-label-muted" htmlFor="cust-detail-visit-user">
+                User
+              </label>
+              <UiSelect
+                id="cust-detail-visit-user"
+                value={visitUserId}
+                onChange={setVisitUserId}
+                options={userFilterOptions}
+                searchable
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label-muted" htmlFor="cust-detail-visit-from">
+                From date
+              </label>
+              <input
+                id="cust-detail-visit-from"
+                type="date"
+                className="form-input"
+                value={visitDateFrom}
+                onChange={(e) => setVisitDateFrom(e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label-muted" htmlFor="cust-detail-visit-to">
+                To date
+              </label>
+              <input
+                id="cust-detail-visit-to"
+                type="date"
+                className="form-input"
+                value={visitDateTo}
+                onChange={(e) => setVisitDateTo(e.target.value)}
+              />
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {tab === 'followup' && (
+        <div className="flux-card space-y-4 rounded-2xl border border-neutral-200 bg-white p-4 shadow-panel-lg">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Follow-up filters</p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="form-field sm:col-span-2 lg:col-span-1">
+              <label className="form-label-muted" htmlFor="cust-detail-follow-search">
+                Search note
+              </label>
+              <input
+                id="cust-detail-follow-search"
+                type="text"
+                className="form-input"
+                placeholder="Search follow-up notes"
+                value={followQuery}
+                onChange={(e) => setFollowQuery(e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label-muted" htmlFor="cust-detail-follow-from">
+                From date
+              </label>
+              <input
+                id="cust-detail-follow-from"
+                type="date"
+                className="form-input"
+                value={followFrom}
+                onChange={(e) => setFollowFrom(e.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label className="form-label-muted" htmlFor="cust-detail-follow-to">
+                To date
+              </label>
+              <input
+                id="cust-detail-follow-to"
+                type="date"
+                className="form-input"
+                value={followTo}
+                onChange={(e) => setFollowTo(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setFollowQuery('');
+                setFollowFrom('');
+                setFollowTo('');
+              }}
+            >
+              Clear
+            </button>
+            <button type="button" className="btn-primary" onClick={() => void loadCustomerFollowUps()}>
+              Apply
+            </button>
+          </div>
+        </div>
+      )}
 
       {tab === 'profile' && (
         <div className="space-y-4">
@@ -297,77 +387,80 @@ export default function CustomerDetailPage() {
             <CustomerProfileSummary c={customer} />
           </div>
 
-          <div className="flux-card rounded-2xl border border-neutral-200 bg-white p-5 shadow-panel-lg">
-            <h2 className="mb-3 text-base font-bold text-dark">Customer follow-up</h2>
-            <div className="grid gap-2 sm:grid-cols-4">
-              <textarea
-                rows={2}
-                className="form-textarea sm:col-span-2"
-                placeholder="Add follow-up note"
-                value={followNote}
-                onChange={(e) => setFollowNote(e.target.value)}
-              />
-              <select className="form-select" value={followType} onChange={(e) => setFollowType(e.target.value)}>
-                <option value="call">Call</option>
-                <option value="visit">Visit</option>
-                <option value="message">Message</option>
-                <option value="other">Other</option>
-              </select>
-              <input
-                type="datetime-local"
-                className="form-input"
-                value={followDate}
-                onChange={(e) => setFollowDate(e.target.value)}
-              />
-            </div>
-            <div className="mt-2 flex justify-end">
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={followSaving}
-                onClick={() => void addCustomerFollowUp()}
-              >
-                {followSaving ? 'Saving...' : 'Add follow-up'}
-              </button>
-            </div>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-100">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                    <th className="px-3 py-2">When</th>
-                    <th className="px-3 py-2">Type</th>
-                    <th className="px-3 py-2">Next follow-up</th>
-                    <th className="px-3 py-2">Created by</th>
-                    <th className="px-3 py-2">Note</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {customerFollowUps.length ? (
-                    customerFollowUps.map((f) => (
-                      <tr key={f._id} className="border-t border-neutral-100">
-                        <td className="px-3 py-2">{formatDt(f.createdAt)}</td>
-                        <td className="px-3 py-2 capitalize">{f.actionType || '-'}</td>
-                        <td className="px-3 py-2">{formatDt(f.nextFollowUpAt)}</td>
-                        <td className="px-3 py-2">
-                          {f.createdByUserId?.name ||
-                            f.createdByUserId?.email ||
-                            f.createdByAdminId?.name ||
-                            f.createdByAdminId?.email ||
-                            '-'}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-slate-700">{f.note || '-'}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
-                        No customer follow-up history.
+        </div>
+      )}
+
+      {tab === 'followup' && (
+        <div className="flux-card rounded-2xl border border-neutral-200 bg-white p-5 shadow-panel-lg">
+          <h2 className="mb-3 text-base font-bold text-dark">Customer follow-up</h2>
+          <div className="grid gap-2 sm:grid-cols-5">
+            <textarea
+              rows={2}
+              className="form-textarea sm:col-span-2"
+              placeholder="Add follow-up note"
+              value={followNote}
+              onChange={(e) => setFollowNote(e.target.value)}
+            />
+            <select className="form-select" value={followType} onChange={(e) => setFollowType(e.target.value)}>
+              <option value="call">Call</option>
+              <option value="visit">Visit</option>
+              <option value="message">Message</option>
+              <option value="other">Other</option>
+            </select>
+            <input type="datetime-local" className="form-input" value={followDate} onChange={(e) => setFollowDate(e.target.value)} />
+            <select className="form-select" value={followAssignedTo} onChange={(e) => setFollowAssignedTo(e.target.value)}>
+              <option value="">Unassigned</option>
+              {users.map((u) => (
+                <option key={u._id} value={u._id}>
+                  {u.name || u.email || 'User'}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="mt-2 flex justify-end">
+            <button type="button" className="btn-primary" disabled={followSaving} onClick={() => void addCustomerFollowUp()}>
+              {followSaving ? 'Saving...' : 'Add follow-up'}
+            </button>
+          </div>
+          <div className="mt-3 overflow-x-auto rounded-lg border border-neutral-100">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                  <th className="px-3 py-2">When</th>
+                  <th className="px-3 py-2">Type</th>
+                  <th className="px-3 py-2">Next follow-up</th>
+                  <th className="px-3 py-2">Assigned to</th>
+                  <th className="px-3 py-2">Created by</th>
+                  <th className="px-3 py-2">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customerFollowUps.length ? (
+                  customerFollowUps.map((f) => (
+                    <tr key={f._id} className="border-t border-neutral-100">
+                      <td className="px-3 py-2">{formatDt(f.createdAt)}</td>
+                      <td className="px-3 py-2 capitalize">{f.actionType || '-'}</td>
+                      <td className="px-3 py-2">{formatDt(f.nextFollowUpAt)}</td>
+                      <td className="px-3 py-2">{f.assignedToUserId?.name || f.assignedToUserId?.email || '-'}</td>
+                      <td className="px-3 py-2">
+                        {f.createdByUserId?.name ||
+                          f.createdByUserId?.email ||
+                          f.createdByAdminId?.name ||
+                          f.createdByAdminId?.email ||
+                          '-'}
                       </td>
+                      <td className="px-3 py-2 text-xs text-slate-700">{f.note || '-'}</td>
                     </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
+                      No customer follow-up history.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
