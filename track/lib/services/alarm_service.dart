@@ -72,6 +72,8 @@ class AlarmService {
         'Alarms',
         description: 'Reminder alarms',
         importance: Importance.max,
+        // Use device alarm ringtone URI.
+        sound: UriAndroidNotificationSound('content://settings/system/alarm_alert'),
         playSound: true,
         enableVibration: true,
         audioAttributesUsage: AudioAttributesUsage.alarm,

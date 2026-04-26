@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -131,6 +132,33 @@ Future<void> _playAlarmWithFallback(AudioPlayer player, int id) async {
   throw StateError('Alarm play failed without explicit error.');
 }
 
+Future<void> _startSystemAlarmTone(int id) async {
+  if (!Platform.isAndroid) return;
+  try {
+    await FlutterRingtonePlayer().play(
+      // Use actual alarm ringtone profile.
+      android: AndroidSounds.alarm,
+      ios: IosSounds.glass,
+      looping: true,
+      volume: 0.7,
+      asAlarm: false,
+    );
+    attendanceAlarmLog('RING system alarm tone started id=$id');
+  } catch (e) {
+    attendanceAlarmLog('RING system alarm tone failed id=$id err=$e');
+  }
+}
+
+Future<void> _stopSystemAlarmTone(int id) async {
+  if (!Platform.isAndroid) return;
+  try {
+    await FlutterRingtonePlayer().stop();
+    attendanceAlarmLog('RING system alarm tone stopped id=$id');
+  } catch (e) {
+    attendanceAlarmLog('RING system alarm tone stop failed id=$id err=$e');
+  }
+}
+
 /// Entry point for [AndroidAlarmManager] — must be top-level for
 /// [PluginUtilities.getCallbackFromHandle].
 ///
@@ -195,21 +223,11 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
   }
 
   final player = AudioPlayer();
+  const usingSystemTone = true;
   try {
     await _clearStoppedByUser(id);
-    await player.setAudioContext(
-      AudioContext(
-        android: AudioContextAndroid(
-          isSpeakerphoneOn: true,
-          stayAwake: true,
-          contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
-        ),
-      ),
-    );
-    await player.setVolume(1.0);
-    await player.setReleaseMode(ReleaseMode.loop);
-    attendanceAlarmLog('RING play asset id=$id');
+    // Force a single tone source to avoid mixing old app asset sound with system tone.
+    await _startSystemAlarmTone(id);
     if (Platform.isAndroid) {
       final ringStartedMs = DateTime.now().millisecondsSinceEpoch;
       final androidDetails = AndroidNotificationDetails(
@@ -231,6 +249,10 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
         usesChronometer: true,
         visibility: NotificationVisibility.public,
         subText: isCheckout ? 'Check-out' : 'Check-in',
+        // Use true alarm tone URI.
+        sound: const UriAndroidNotificationSound(
+          'content://settings/system/alarm_alert',
+        ),
         audioAttributesUsage: AudioAttributesUsage.alarm,
         actions: <AndroidNotificationAction>[
           AndroidNotificationAction(
@@ -263,31 +285,31 @@ Future<void> _attendanceAlarmRingAsync(int id, Map<String, dynamic> params) asyn
         attendanceAlarmLog('RING notification FAILED id=$id err=$e st=$st');
       }
     }
-    await _playAlarmWithFallback(player, id);
     attendanceAlarmLog('RING audio playing ${_kAlarmRingDuration.inSeconds}s id=$id');
     final deadline = DateTime.now().add(_kAlarmRingDuration);
     while (DateTime.now().isBefore(deadline)) {
       if (await _isStoppedByUser(id)) {
         attendanceAlarmLog('RING stopped by user action id=$id');
-        await player.stop();
+        await _stopSystemAlarmTone(id);
         attendanceAlarmLog('RING stopped immediately id=$id');
         break;
       }
       final stillVisible = await _isAlarmNotificationStillVisible(notifications, id);
       if (!stillVisible) {
         attendanceAlarmLog('RING stopped because notification dismissed id=$id');
-        await player.stop();
+        await _stopSystemAlarmTone(id);
         attendanceAlarmLog('RING stopped immediately on dismiss id=$id');
         break;
       }
       await Future<void>.delayed(_kStopCheckInterval);
     }
     // Ensure we are fully stopped even when loop exits by timeout.
-    await player.stop();
+    await _stopSystemAlarmTone(id);
     attendanceAlarmLog('RING finished id=$id');
   } catch (e, st) {
     attendanceAlarmLog('RING ERROR id=$id err=$e st=$st');
   } finally {
+    await _stopSystemAlarmTone(id);
     await player.dispose();
     if (Platform.isAndroid) {
       try {

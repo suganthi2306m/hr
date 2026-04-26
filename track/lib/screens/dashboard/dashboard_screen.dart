@@ -21,6 +21,7 @@ import 'package:track/widgets/task_brand_icon.dart';
 import 'package:track/screens/profile/profile_screen.dart';
 import 'package:track/screens/visits/visits_screen.dart';
 import 'package:track/screens/settings/settings_screen.dart';
+import 'package:track/screens/leave/leave_request_screen.dart';
 import 'package:track/services/attendance_alarm_log.dart';
 import 'package:track/services/attendance_alarm_punch_state.dart';
 import 'package:track/services/attendance_alarm_scheduler.dart';
@@ -1191,6 +1192,19 @@ class _DashboardScreenState extends State<DashboardScreen>
                               selected: false,
                               tooltip: 'Attendance alarms',
                               onTap: () => showAttendanceAlarmSetupSheet(context),
+                            ),
+                            _shortcutChip(
+                              icon: Icons.event_note_rounded,
+                              selected: false,
+                              tooltip: 'Apply leave',
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const LeaveRequestScreen(),
+                                  ),
+                                ).then((_) => _bootstrap());
+                              },
                             ),
                             _shortcutChip(
                               iconWidget: TaskBrandIcon(

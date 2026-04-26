@@ -377,7 +377,7 @@ class _CustomerDetailTabsScreenState extends State<CustomerDetailTabsScreen>
         ),
       ),
       bottomNavigationBar: OvalBottomNavBar(
-        currentIndex: 0,
+        currentIndex: null,
         onTap: (i) => pushMainShellByIndex(context, i),
       ),
     );

@@ -258,8 +258,11 @@ async function createPaysharpUpiIntent({
       msg =
         'Paysharp returned HTML for UPI Intent — set PAYSHARP_UPI_API_BASE_URL or use sandbox default; check Bearer token matches that host.';
     }
+    if (/whitelist|ip address/i.test(String(msg))) {
+      msg = `${msg} Add your server’s outbound IP (or full CIDR ranges from your host, e.g. Render) in Paysharp → API IP Whitelisting.`;
+    }
     const err = new Error(msg);
-    err.status = 502;
+    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
     err.raw = raw;
     throw err;
   }
@@ -273,8 +276,13 @@ async function createPaysharpUpiIntent({
     } else if (c >= 500 || Number(raw.errorCode) === 5001 || /internal server error/i.test(String(msg))) {
       msg = `Paysharp UPI Intent: ${msg}${ec}. Confirm the Bearer is the dashboard API token (not webhook secret) and UPI Intent is enabled for this sandbox merchant.`;
     }
+    if (/whitelist|ip address/i.test(String(msg))) {
+      msg = `${msg} Add your server’s outbound IP (or full CIDR ranges from your host, e.g. Render) in Paysharp → API IP Whitelisting.`;
+    }
+    let status = 502;
+    if (Number.isFinite(c) && c >= 400 && c < 600) status = c;
     const err = new Error(msg);
-    err.status = 502;
+    err.status = status;
     err.raw = raw;
     throw err;
   }
@@ -428,8 +436,11 @@ async function createPaysharpCheckout({
       msg =
         'Paysharp returned an HTML error page (wrong API path). For sandbox use base https://sandbox.paysharp.co.in (we call /api/v1/upi/linkpayment). For live use the API host from your dashboard (we call /v1/upi/linkpayment).';
     }
+    if (/whitelist|ip address/i.test(String(msg))) {
+      msg = `${msg} Add your server’s outbound IP (or full CIDR ranges from your host, e.g. Render) in Paysharp → API IP Whitelisting.`;
+    }
     const err = new Error(msg);
-    err.status = 502;
+    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
     err.raw = raw;
     throw err;
   }
@@ -445,8 +456,13 @@ async function createPaysharpCheckout({
     } else if (c >= 500 || /internal server error/i.test(String(msg))) {
       msg = `Paysharp: ${msg}${ec}. Usually wrong or expired API token, or Link Payment not enabled for this sandbox account — confirm token in Paysharp Settings → Configuration.`;
     }
+    if (/whitelist|ip address/i.test(String(msg))) {
+      msg = `${msg} Add your server’s outbound IP (or full CIDR ranges from your host, e.g. Render) in Paysharp → API IP Whitelisting.`;
+    }
+    let status = 502;
+    if (Number.isFinite(c) && c >= 400 && c < 600) status = c;
     const err = new Error(msg);
-    err.status = 502;
+    err.status = status;
     err.raw = raw;
     throw err;
   }

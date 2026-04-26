@@ -5,6 +5,7 @@ import './index.css';
 import App from './App.jsx';
 import { AuthProvider } from './context/AuthContext';
 import logoUrl from './assets/logo.png';
+import AppErrorBoundary from './components/common/AppErrorBoundary';
 
 let faviconLink = document.querySelector("link[rel='icon']");
 if (!faviconLink) {
@@ -17,10 +18,12 @@ faviconLink.href = logoUrl;
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <BrowserRouter>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    </BrowserRouter>
+    <AppErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </BrowserRouter>
+    </AppErrorBoundary>
   </StrictMode>,
 );

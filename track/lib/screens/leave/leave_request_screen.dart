@@ -11,6 +11,7 @@ import 'package:track/screens/settings/settings_screen.dart';
 import 'package:track/screens/visits/visits_screen.dart';
 import 'package:track/services/attendance_service.dart';
 import 'package:track/services/auth_service.dart';
+import 'package:track/navigation/main_shell_navigation.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
 import 'package:track/widgets/app_tab_loader.dart';
 
@@ -108,18 +109,7 @@ class _LeaveRequestScreenState extends State<LeaveRequestScreen> {
   }
 
   void _navigateToIndex(int index) {
-    if (index < 0 || index > 3) return;
-    final Widget target = switch (index) {
-      0 => const DashboardScreen(),
-      1 => const MyTasksScreen(),
-      2 => const VisitsScreen(),
-      3 => const AttendanceScreen(),
-      _ => const DashboardScreen(),
-    };
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => target),
-    );
+    pushMainShellByIndex(context, index);
   }
 
   Future<void> _logout() async {
@@ -778,7 +768,7 @@ class _LeaveRequestScreenState extends State<LeaveRequestScreen> {
         ),
       ),
       bottomNavigationBar: OvalBottomNavBar(
-        currentIndex: 0,
+        currentIndex: null,
         onTap: _navigateToIndex,
       ),
     );

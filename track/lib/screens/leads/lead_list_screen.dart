@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/models/lead.dart';
 import 'package:track/navigation/main_shell_navigation.dart';
@@ -73,6 +74,7 @@ class LeadListScreen extends StatefulWidget {
 class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavigation {
   final LeadService _leadService = LeadService();
   final TextEditingController _searchCtrl = TextEditingController();
+  final ScrollController _followUpDateScrollController = ScrollController();
   List<LeadItem> _items = const [];
   List<FollowUpFeedItem> _followUpItems = const [];
   bool _loading = true;
@@ -88,6 +90,10 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
   DateTime? _leadFromDate;
   DateTime? _leadToDate;
   bool _filtersOpen = false;
+  late DateTime _selectedFollowUpDay;
+  static const int _followUpStripPastDays = 20;
+  static const int _followUpStripDayCount = 41;
+  static const double _followUpDayCellWidth = 52;
 
   static const List<DropdownMenuItem<String>> _statusItems = [
     DropdownMenuItem(value: '', child: Text('All statuses')),
@@ -101,6 +107,8 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
   @override
   void initState() {
     super.initState();
+    _selectedFollowUpDay = _dateOnly(DateTime.now());
+    _syncFollowUpDateRangeWithSelectedDay();
     _load();
   }
 
@@ -120,8 +128,10 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
         search: _searchCtrl.text.trim(),
         companyName: _companyCtrl.text.trim(),
         status: _status,
-        from: _fromDate,
-        to: _toDate,
+        // Date filtering is applied client-side by effective follow-up date:
+        // nextFollowUpDate (assigned) fallback createdAt.
+        from: null,
+        to: null,
       );
       if (!mounted) return;
       setState(() {
@@ -140,7 +150,95 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
   void dispose() {
     _searchCtrl.dispose();
     _companyCtrl.dispose();
+    _followUpDateScrollController.dispose();
     super.dispose();
+  }
+
+  static DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  DateTime _followUpStripRangeStart() =>
+      _dateOnly(DateTime.now()).subtract(const Duration(days: _followUpStripPastDays));
+
+  void _syncFollowUpDateRangeWithSelectedDay() {
+    final day = _dateOnly(_selectedFollowUpDay);
+    _fromDate = day;
+    _toDate = day.add(const Duration(hours: 23, minutes: 59, seconds: 59));
+  }
+
+  Widget _followUpDayCell(DateTime day) {
+    final isSelected = _dateOnly(day) == _dateOnly(_selectedFollowUpDay);
+    final label = DateFormat('EEE').format(day).substring(0, 2).toUpperCase();
+    return InkWell(
+      onTap: () async {
+        setState(() {
+          _selectedFollowUpDay = _dateOnly(day);
+          _syncFollowUpDateRangeWithSelectedDay();
+          _followUpPage = 1;
+        });
+        await _load();
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: isSelected ? AppColors.primary : Colors.black45,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: isSelected ? AppColors.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${day.day}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: isSelected ? Colors.black : Colors.black87,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _followUpDateStrip() {
+    final start = _followUpStripRangeStart();
+    final days = List.generate(_followUpStripDayCount, (i) => start.add(Duration(days: i)));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+      child: Material(
+        elevation: 6,
+        shadowColor: Colors.black26,
+        borderRadius: BorderRadius.circular(18),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: SingleChildScrollView(
+            controller: _followUpDateScrollController,
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final d in days)
+                  SizedBox(
+                    width: _followUpDayCellWidth,
+                    child: _followUpDayCell(d),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _logout() async {
@@ -177,6 +275,27 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
     final l = dt.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(l.day)}/${two(l.month)}/${l.year} ${two(l.hour)}:${two(l.minute)}';
+  }
+
+  List<FollowUpFeedItem> get _visibleFollowUpItems {
+    return _followUpItems.where((f) {
+      final effectiveDate = f.nextFollowUpDate ?? f.createdAt;
+      if (_fromDate != null && effectiveDate != null && effectiveDate.isBefore(_fromDate!)) {
+        return false;
+      }
+      if (_toDate != null && effectiveDate != null) {
+        final toEnd = DateTime(
+          _toDate!.year,
+          _toDate!.month,
+          _toDate!.day,
+          23,
+          59,
+          59,
+        );
+        if (effectiveDate.isAfter(toEnd)) return false;
+      }
+      return true;
+    }).toList();
   }
 
   InputDecoration _formFieldDecoration({required String hint, IconData? icon}) =>
@@ -371,7 +490,7 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
             tooltip: 'Menu',
           ),
           title: const Text(
-            'YOUR SALES',
+            'YOUR LEADS',
             style: TextStyle(
               color: Colors.black,
               fontSize: 20,
@@ -429,7 +548,10 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                           child: Text(
                             'Leads',
                             textAlign: TextAlign.center,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: _tabIndex == 0 ? Colors.black : Colors.black87,
+                            ),
                           ),
                         ),
                       ),
@@ -437,7 +559,14 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                     Expanded(
                       child: InkWell(
                         borderRadius: BorderRadius.circular(12),
-                        onTap: () => setState(() => _tabIndex = 1),
+                        onTap: () {
+                          setState(() {
+                            _tabIndex = 1;
+                            _syncFollowUpDateRangeWithSelectedDay();
+                            _followUpPage = 1;
+                          });
+                          _load();
+                        },
                         child: Container(
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           decoration: BoxDecoration(
@@ -447,7 +576,10 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                           child: Text(
                             'Follow-up',
                             textAlign: TextAlign.center,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: _tabIndex == 1 ? Colors.black : Colors.black87,
+                            ),
                           ),
                         ),
                       ),
@@ -456,6 +588,7 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                 ),
               ),
             ),
+            if (_tabIndex == 1) _followUpDateStrip(),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
               child: Column(
@@ -599,24 +732,51 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                                         separatorBuilder: (_, __) => const Divider(height: 1),
                                         itemBuilder: (_, i) {
                                           final row = pageItems[i];
-                                          return ListTile(
-                                            title: Text(row.leadName),
-                                            subtitle: Text(
-                                              '${row.companyName}\n${row.phoneNumber.isNotEmpty ? row.phoneNumber : row.emailId}',
+                                          final statusText = row.status.replaceAll('_', ' ');
+                                          return Card(
+                                            margin: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+                                            elevation: 0,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(14),
+                                              side: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
                                             ),
-                                            isThreeLine: true,
-                                            trailing: Text(
-                                              row.status.replaceAll('_', ' '),
-                                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                                            ),
-                                            onTap: () {
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (_) => LeadDetailScreen(leadId: row.id),
+                                            child: ListTile(
+                                              leading: Container(
+                                                padding: const EdgeInsets.all(8),
+                                                decoration: BoxDecoration(
+                                                  color: AppColors.primary.withValues(alpha: 0.2),
+                                                  borderRadius: BorderRadius.circular(10),
                                                 ),
-                                              );
-                                            },
+                                                child: const Icon(Icons.person_outline_rounded),
+                                              ),
+                                              title: Text(
+                                                row.leadName,
+                                                style: const TextStyle(fontWeight: FontWeight.w800),
+                                              ),
+                                              subtitle: Text(
+                                                '${row.companyName}\n${row.phoneNumber.isNotEmpty ? row.phoneNumber : row.emailId}',
+                                              ),
+                                              isThreeLine: true,
+                                              trailing: Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                decoration: BoxDecoration(
+                                                  color: AppColors.primary.withValues(alpha: 0.18),
+                                                  borderRadius: BorderRadius.circular(999),
+                                                ),
+                                                child: Text(
+                                                  statusText,
+                                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                                                ),
+                                              ),
+                                              onTap: () {
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) => LeadDetailScreen(leadId: row.id),
+                                                  ),
+                                                );
+                                              },
+                                            ),
                                           );
                                         },
                                       ),
@@ -635,7 +795,7 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                             )
                           : Builder(
                               builder: (_) {
-                                final rows = _followUpItems;
+                                final rows = _visibleFollowUpItems;
                                 if (rows.isEmpty) return const Center(child: Text('No follow-up history'));
                                 final total = rows.length;
                                 final start = (_followUpPage - 1) * _pageSize;
@@ -649,20 +809,43 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                                         separatorBuilder: (_, __) => const Divider(height: 1),
                                         itemBuilder: (_, i) {
                                           final row = pageItems[i];
-                                          return ListTile(
-                                            title: Text('${row.leadName} · ${row.companyName}'),
-                                            subtitle: Text(
-                                              '${row.notesPreview}\n${row.followUpType.toUpperCase()}'
-                                              '  |  Next: ${_fmtDateTime(row.nextFollowUpDate)}'
-                                              '  |  Added: ${_fmtDateTime(row.createdAt)}'
-                                              '  |  By: ${row.createdByName.isEmpty ? '--' : row.createdByName}',
+                                          return Card(
+                                            margin: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+                                            elevation: 0,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(14),
+                                              side: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
                                             ),
-                                            isThreeLine: true,
-                                            trailing: Text(
-                                              row.status.replaceAll('_', ' '),
-                                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                            child: ListTile(
+                                              leading: Container(
+                                                padding: const EdgeInsets.all(8),
+                                                decoration: BoxDecoration(
+                                                  color: AppColors.primary.withValues(alpha: 0.2),
+                                                  borderRadius: BorderRadius.circular(10),
+                                                ),
+                                                child: Icon(
+                                                  row.followUpType == 'visit'
+                                                      ? Icons.storefront_rounded
+                                                      : row.followUpType == 'message'
+                                                          ? Icons.chat_bubble_outline_rounded
+                                                          : Icons.call_outlined,
+                                                ),
+                                              ),
+                                              title: Text(
+                                                '${row.leadName} · ${row.companyName}',
+                                                style: const TextStyle(fontWeight: FontWeight.w800),
+                                              ),
+                                              subtitle: Text(
+                                                '${row.notesPreview}\n${row.followUpType.toUpperCase()}'
+                                                '  |  Next: ${_fmtDateTime(row.nextFollowUpDate)}',
+                                              ),
+                                              isThreeLine: true,
+                                              trailing: Icon(
+                                                Icons.chevron_right_rounded,
+                                                color: Colors.grey.shade500,
+                                              ),
+                                              onTap: () => _openFollowUpDetail(row),
                                             ),
-                                            onTap: () => _openFollowUpDetail(row),
                                           );
                                         },
                                       ),
@@ -683,7 +866,7 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
           ],
         ),
         bottomNavigationBar: OvalBottomNavBar(
-          currentIndex: 4,
+          currentIndex: 3,
           onTap: (idx) => pushMainShellByIndex(context, idx),
         ),
       ),

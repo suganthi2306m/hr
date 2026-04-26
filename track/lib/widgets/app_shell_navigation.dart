@@ -181,7 +181,7 @@ class OvalBottomNavBar extends StatelessWidget {
     required this.onTap,
   });
 
-  final int currentIndex;
+  final int? currentIndex;
   final ValueChanged<int> onTap;
 
   @override
@@ -203,35 +203,45 @@ class OvalBottomNavBar extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           child: BottomNavigationBar(
-            currentIndex: currentIndex,
+            currentIndex: currentIndex ?? 0,
             onTap: onTap,
             type: BottomNavigationBarType.fixed,
             elevation: 0,
             backgroundColor: Colors.transparent,
-            selectedItemColor: AppColors.primary,
+            selectedItemColor: currentIndex == null ? Colors.white54 : AppColors.primary,
             unselectedItemColor: Colors.white54,
             selectedFontSize: 11,
             unselectedFontSize: 11,
+            selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
+            unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
+            showUnselectedLabels: true,
             items: [
-              const BottomNavigationBarItem(
+              BottomNavigationBarItem(
                 icon: Icon(Icons.fact_check_outlined),
-                activeIcon: Icon(Icons.fact_check_rounded),
+                activeIcon: Icon(
+                  currentIndex == null
+                      ? Icons.fact_check_outlined
+                      : Icons.fact_check_rounded,
+                ),
                 label: 'Attendance',
               ),
-              const BottomNavigationBarItem(
+              BottomNavigationBarItem(
                 icon: Icon(Icons.dashboard_outlined),
-                activeIcon: Icon(Icons.dashboard_rounded),
+                activeIcon: Icon(
+                  currentIndex == null
+                      ? Icons.dashboard_outlined
+                      : Icons.dashboard_rounded,
+                ),
                 label: 'Dashboard',
               ),
-              const BottomNavigationBarItem(
+              BottomNavigationBarItem(
                 icon: Icon(Icons.storefront_outlined),
-                activeIcon: Icon(Icons.storefront_rounded),
+                activeIcon: Icon(
+                  currentIndex == null
+                      ? Icons.storefront_outlined
+                      : Icons.storefront_rounded,
+                ),
                 label: 'Visits',
-              ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.groups_outlined),
-                activeIcon: Icon(Icons.groups_rounded),
-                label: 'Customers',
               ),
               BottomNavigationBarItem(
                 icon: TaskBrandIcon(
@@ -239,8 +249,8 @@ class OvalBottomNavBar extends StatelessWidget {
                   color: Colors.white.withValues(alpha: 0.54),
                 ),
                 activeIcon: TaskBrandIcon(
-                  size: 24,
-                  color: AppColors.primary,
+                  size: currentIndex == null ? 22 : 24,
+                  color: currentIndex == null ? Colors.white54 : AppColors.primary,
                 ),
                 label: 'Leads',
               ),
@@ -263,7 +273,7 @@ mixin MainShellSwipeNavigation<T extends StatefulWidget> on State<T> {
     // Positive velocity = swipe right -> move backward in shell tabs.
     if (velocity < 0) {
       final next = currentIndex + 1;
-      if (next <= 4 && mounted) {
+      if (next <= 3 && mounted) {
         pushMainShellByIndex(context, next);
       }
       return;
