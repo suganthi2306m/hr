@@ -250,6 +250,12 @@ async function createPaysharpUpiIntent({
     let msg = raw.message || raw.error || `Paysharp HTTP ${res.status}`;
     const ec = raw.errorCode != null ? Number(raw.errorCode) : NaN;
     const c = raw.code != null ? Number(raw.code) : NaN;
+    if (
+      res.status === 401 ||
+      (res.status === 403 && /access denied/i.test(String(msg)) && !/whitelist|ip address/i.test(String(msg)))
+    ) {
+      msg = `Paysharp access denied (HTTP ${res.status}). Use the dashboard API token as Bearer (PAYSHARP_API_TOKEN or Super Admin → Paysharp)—not the webhook secret; match sandbox vs live API host.`;
+    }
     if (ec === 5001 || (Number.isFinite(c) && c >= 500)) {
       const base = String(msg || 'Internal Server Error');
       msg = `Paysharp UPI Intent: ${base}${Number.isFinite(ec) ? ` (errorCode ${ec})` : ''}. Use the dashboard API token as Bearer—not the webhook signing secret—and confirm UPI / Intent is enabled for this merchant in the Paysharp sandbox.`;
@@ -432,6 +438,12 @@ async function createPaysharpCheckout({
 
   if (!res.ok) {
     let msg = raw.message || raw.error || `Paysharp HTTP ${res.status}`;
+    if (
+      res.status === 401 ||
+      (res.status === 403 && /access denied/i.test(String(msg)) && !/whitelist|ip address/i.test(String(msg)))
+    ) {
+      msg = `Paysharp access denied (HTTP ${res.status}). Use the dashboard API token as Bearer (PAYSHARP_API_TOKEN or Super Admin → Paysharp)—not the webhook secret; match sandbox vs live API host.`;
+    }
     if (!raw.message && !raw.error && !raw.code && ct.includes('text/html')) {
       msg =
         'Paysharp returned an HTML error page (wrong API path). For sandbox use base https://sandbox.paysharp.co.in (we call /api/v1/upi/linkpayment). For live use the API host from your dashboard (we call /v1/upi/linkpayment).';

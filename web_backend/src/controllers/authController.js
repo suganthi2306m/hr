@@ -85,7 +85,7 @@ async function getPrimaryCatalogOwnerAdmin() {
   const owner = await resolveDefaultCatalogOwnerAdmin();
   if (!owner) {
     const err = new Error(
-      `No active billing super admin found. Configure ${getPreferredSuperAdminEmail()} or a main super admin account.`,
+      `No active billing super admin found. Ensure an Admin exists with email ${getPreferredSuperAdminEmail()}, role superadmin or mainsuperadmin, and isActive true.`,
     );
     err.status = 503;
     throw err;

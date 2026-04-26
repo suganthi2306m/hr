@@ -7,7 +7,7 @@ function normalizeEmail(raw) {
 }
 
 function getPreferredSuperAdminEmail() {
-  return normalizeEmail(process.env.PREFERRED_BILLING_SUPERADMIN_EMAIL || DEFAULT_SUPERADMIN_EMAIL);
+  return normalizeEmail(DEFAULT_SUPERADMIN_EMAIL);
 }
 
 async function findPreferredSuperAdmin() {
@@ -22,20 +22,14 @@ async function findPreferredSuperAdmin() {
     .lean();
 }
 
-async function findFallbackMainSuperAdmin() {
-  return Admin.findOne({ role: 'mainsuperadmin' }).sort({ createdAt: 1 }).lean();
-}
-
+/** Billing / public signup catalog owner: only manjunath@mcrindia.in (no env override, no fallback to other mainsuperadmins). */
 async function resolveDefaultCatalogOwnerAdmin() {
-  const preferred = await findPreferredSuperAdmin();
-  if (preferred) return preferred;
-  return findFallbackMainSuperAdmin();
+  return findPreferredSuperAdmin();
 }
 
 module.exports = {
   DEFAULT_SUPERADMIN_EMAIL,
   getPreferredSuperAdminEmail,
   findPreferredSuperAdmin,
-  findFallbackMainSuperAdmin,
   resolveDefaultCatalogOwnerAdmin,
 };

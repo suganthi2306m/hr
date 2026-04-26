@@ -111,7 +111,17 @@ function assemblePaysharpConfig(p, { useEnvToken, partnerOnly }) {
     ? String(process.env.PAYSHARP_API_TOKEN || process.env.PAYSHARP_BEARER_TOKEN || '').trim()
     : '';
   const apiKeyFromDb = readPlainFromDoc({ paysharp: pay }, 'paysharp.apiKey');
-  const apiKey = envToken || secretKey || apiKeyFromDb;
+  const apiKeyFromDbTrim = String(apiKeyFromDb || '').trim();
+  /** Partner superadmin billing: never let global PAYSHARP_SECRET_KEY / API_BASE_URL override keys saved on that admin (common 401 cause). */
+  let apiKey;
+  let apiTokenSource;
+  if (partnerOnly && apiKeyFromDbTrim) {
+    apiKey = apiKeyFromDbTrim;
+    apiTokenSource = 'db';
+  } else {
+    apiKey = String(envToken || secretKey || apiKeyFromDb || '').trim();
+    apiTokenSource = envToken ? 'env' : secretKey ? 'env_secret' : apiKeyFromDbTrim ? 'db' : 'none';
+  }
   const webhookSecret = readPlainFromDoc({ paysharp: pay }, 'paysharp.webhookSecret');
   const akTrim = String(apiKey || '').trim();
   const whTrim = String(webhookSecret || '').trim();
@@ -119,7 +129,10 @@ function assemblePaysharpConfig(p, { useEnvToken, partnerOnly }) {
   const envBase = String(process.env.PAYSHARP_API_BASE_URL || '').trim();
   const dbBase = String(pay.apiBaseUrl || '').trim();
   const sandboxEnv = String(process.env.PAYSHARP_SANDBOX_API_BASE_URL || '').trim();
-  let apiBaseUrl = paysharpBaseOrEmpty(envBase) || paysharpBaseOrEmpty(dbBase);
+  const dbBaseValid = paysharpBaseOrEmpty(dbBase);
+  const envBaseValid = paysharpBaseOrEmpty(envBase);
+  let apiBaseUrl =
+    partnerOnly && dbBaseValid ? dbBaseValid : envBaseValid || dbBaseValid;
   if (!apiBaseUrl) {
     if (pay.useSandbox) {
       apiBaseUrl = paysharpBaseOrEmpty(sandboxEnv) || DEFAULT_PAYSHARP_SANDBOX_BASE;
@@ -134,7 +147,7 @@ function assemblePaysharpConfig(p, { useEnvToken, partnerOnly }) {
     webhookSecret,
     apiBaseUrl: apiBaseUrl.replace(/\/+$/, ''),
     useSandbox: Boolean(pay.useSandbox),
-    apiTokenSource: envToken ? 'env' : secretKey ? 'env_secret' : apiKeyFromDb ? 'db' : 'none',
+    apiTokenSource,
     bearerMatchesWebhookSecret,
     partnerOnly: Boolean(partnerOnly),
   };
