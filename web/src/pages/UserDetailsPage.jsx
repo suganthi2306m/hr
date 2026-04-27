@@ -20,6 +20,68 @@ import {
 import { buildCompanyHolidayByDay, holidaysApplicableToBranch } from '../utils/companyHolidays';
 import AttendanceStatCards from '../components/attendance/AttendanceStatCards';
 import AttendanceCalendarGrid from '../components/attendance/AttendanceCalendarGrid';
+import TablePagination from '../components/common/TablePagination';
+
+function csvEscape(value) {
+  const s = value == null ? '' : String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function triggerCsvDownload(filename, header, rows) {
+  const body = [header.map(csvEscape).join(','), ...rows.map((r) => r.map(csvEscape).join(','))].join('\n');
+  const blob = new Blob([`\uFEFF${body}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function personLabel(p) {
+  if (!p) return '';
+  return p.name || p.email || '';
+}
+
+function followUpFilterToday() {
+  return dayjs().format('YYYY-MM-DD');
+}
+
+const LEAD_FU_STATUS_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'new', label: 'New' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'follow_up', label: 'Follow-up' },
+  { value: 'won', label: 'Won' },
+  { value: 'dropped', label: 'Dropped' },
+];
+
+const CUSTOMER_LIFECYCLE_FILTER_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
+];
+
+function followUpScheduleLabel(iso) {
+  if (!iso) return 'No next date';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '—';
+  return t > Date.now() ? 'Upcoming' : 'Past due';
+}
+
+function customerLifecycleShort(x) {
+  const on = String(x?.customerStatus || 'active').toLowerCase() !== 'inactive';
+  const seg = String(x?.segment || 'lead').replace(/_/g, ' ');
+  const segT = seg.replace(/\b\w/g, (c) => c.toUpperCase());
+  return `${on ? 'Active' : 'Inactive'} · ${segT}`;
+}
+
+function formatLeadPipelineStatus(status) {
+  const s = String(status || '').trim();
+  if (!s) return '—';
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function statusChip(status) {
   if (status === 'approved') return 'bg-emerald-100 text-emerald-800';
@@ -33,6 +95,8 @@ const USER_DETAIL_TABS = [
   { id: 'attendance', label: 'Attendance' },
   { id: 'leave', label: 'Leave' },
   { id: 'visits', label: 'Visits' },
+  { id: 'customerFollowup', label: 'Customer follow-up' },
+  { id: 'leadFollowup', label: 'Lead follow-up' },
 ];
 
 function UserDetailsPage() {
@@ -51,6 +115,28 @@ function UserDetailsPage() {
   const [visitStatus, setVisitStatus] = useState('');
   const [visitDateFrom, setVisitDateFrom] = useState('');
   const [visitDateTo, setVisitDateTo] = useState('');
+  const [customerFollowUps, setCustomerFollowUps] = useState([]);
+  const [customerFuLoading, setCustomerFuLoading] = useState(false);
+  const [customerFuError, setCustomerFuError] = useState('');
+  const [cfSearch, setCfSearch] = useState('');
+  const [cfFrom, setCfFrom] = useState(() => followUpFilterToday());
+  const [cfTo, setCfTo] = useState(() => followUpFilterToday());
+  const [cfCustomerId, setCfCustomerId] = useState('');
+  const [cfCustomerStatus, setCfCustomerStatus] = useState('');
+  const [cfCustomersList, setCfCustomersList] = useState([]);
+  const [leadFollowUps, setLeadFollowUps] = useState([]);
+  const [leadFuLoading, setLeadFuLoading] = useState(false);
+  const [leadFuError, setLeadFuError] = useState('');
+  const [lfSearch, setLfSearch] = useState('');
+  const [lfStatus, setLfStatus] = useState('');
+  const [lfFrom, setLfFrom] = useState(() => followUpFilterToday());
+  const [lfTo, setLfTo] = useState(() => followUpFilterToday());
+  const [lfLeadId, setLfLeadId] = useState('');
+  const [lfLeadsList, setLfLeadsList] = useState([]);
+  const [cfPage, setCfPage] = useState(1);
+  const [cfPageSize, setCfPageSize] = useState(10);
+  const [lfPage, setLfPage] = useState(1);
+  const [lfPageSize, setLfPageSize] = useState(10);
   const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -124,6 +210,118 @@ function UserDetailsPage() {
     setGlobalSearch('');
     return () => setGlobalSearch('');
   }, [setGlobalSearch]);
+
+  const loadCustomerFollowUps = async () => {
+    if (!id) return;
+    setCustomerFuLoading(true);
+    setCustomerFuError('');
+    try {
+      const { data } = await apiClient.get('/customers/followups', {
+        params: {
+          userId: id,
+          search: cfSearch.trim() || undefined,
+          customerId: cfCustomerId || undefined,
+          customerStatus: cfCustomerStatus || undefined,
+          from: cfFrom || undefined,
+          to: cfTo || undefined,
+        },
+      });
+      setCustomerFollowUps(Array.isArray(data?.items) ? data.items : []);
+      setCfPage(1);
+    } catch (e) {
+      setCustomerFuError(e.response?.data?.message || 'Unable to load customer follow-ups.');
+    } finally {
+      setCustomerFuLoading(false);
+    }
+  };
+
+  const loadLeadFollowUps = async () => {
+    if (!id) return;
+    setLeadFuLoading(true);
+    setLeadFuError('');
+    try {
+      const { data } = await apiClient.get('/leads/followups', {
+        params: {
+          userId: id,
+          search: lfSearch.trim() || undefined,
+          status: lfStatus || undefined,
+          leadId: lfLeadId || undefined,
+          from: lfFrom || undefined,
+          to: lfTo || undefined,
+        },
+      });
+      setLeadFollowUps(Array.isArray(data?.items) ? data.items : []);
+      setLfPage(1);
+    } catch (e) {
+      setLeadFuError(e.response?.data?.message || 'Unable to load lead follow-ups.');
+    } finally {
+      setLeadFuLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'customerFollowup' || !id) return undefined;
+    void loadCustomerFollowUps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch when tab or employee changes; filters use Apply
+  }, [activeTab, id]);
+
+  useEffect(() => {
+    if (activeTab !== 'leadFollowup' || !id) return undefined;
+    void loadLeadFollowUps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, id]);
+
+  useEffect(() => {
+    if (activeTab !== 'customerFollowup') return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await apiClient.get('/customers');
+        if (!cancelled) setCfCustomersList(Array.isArray(data?.items) ? data.items : []);
+      } catch {
+        if (!cancelled) setCfCustomersList([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'leadFollowup') return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await apiClient.get('/leads');
+        if (!cancelled) setLfLeadsList(Array.isArray(data?.items) ? data.items : []);
+      } catch {
+        if (!cancelled) setLfLeadsList([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  const pagedCustomerFollowUps = useMemo(() => {
+    const start = (cfPage - 1) * cfPageSize;
+    return customerFollowUps.slice(start, start + cfPageSize);
+  }, [customerFollowUps, cfPage, cfPageSize]);
+
+  const pagedLeadFollowUps = useMemo(() => {
+    const start = (lfPage - 1) * lfPageSize;
+    return leadFollowUps.slice(start, start + lfPageSize);
+  }, [leadFollowUps, lfPage, lfPageSize]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(customerFollowUps.length / cfPageSize));
+    if (cfPage > totalPages) setCfPage(totalPages);
+  }, [customerFollowUps.length, cfPageSize, cfPage]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(leadFollowUps.length / lfPageSize));
+    if (lfPage > totalPages) setLfPage(totalPages);
+  }, [leadFollowUps.length, lfPageSize, lfPage]);
 
   const weeklyOffPolicy = useMemo(() => normalizeWeeklyOffPolicy(company?.orgSetup?.weeklyOff), [company]);
 
@@ -226,6 +424,84 @@ function UserDetailsPage() {
     if (!userId) return '—';
     const m = allUsers.find((u) => String(u._id) === String(userId));
     return m ? m.name || m.email : String(userId);
+  };
+
+  const cfCustomerSelectOptions = useMemo(() => {
+    const sorted = [...cfCustomersList].sort((a, b) =>
+      String(a.customerName || a.companyName || '').localeCompare(String(b.customerName || b.companyName || '')),
+    );
+    return [
+      { value: '', label: 'All customers' },
+      ...sorted.map((c) => ({
+        value: String(c._id),
+        label: [c.customerName, c.companyName].filter(Boolean).join(' — ') || 'Customer',
+      })),
+    ];
+  }, [cfCustomersList]);
+
+  const lfLeadSelectOptions = useMemo(() => {
+    const sorted = [...lfLeadsList].sort((a, b) =>
+      String(a.leadName || a.companyName || '').localeCompare(String(b.leadName || b.companyName || '')),
+    );
+    return [
+      { value: '', label: 'All leads' },
+      ...sorted.map((l) => ({
+        value: String(l._id),
+        label: [l.leadName, l.companyName].filter(Boolean).join(' — ') || 'Lead',
+      })),
+    ];
+  }, [lfLeadsList]);
+
+  const exportCustomerFollowUpsCsv = () => {
+    const header = [
+      'Customer',
+      'Company',
+      'Status',
+      'Type',
+      'Next follow-up',
+      'Notes',
+      'Created by',
+      'Assigned to',
+      'Created',
+    ];
+    const rows = customerFollowUps.map((x) => [
+      x.customerName || '',
+      x.companyName || '',
+      `${customerLifecycleShort(x)}; ${followUpScheduleLabel(x.nextFollowUpDate)}`,
+      x.followUpType || '',
+      x.nextFollowUpDate ? dayjs(x.nextFollowUpDate).format('YYYY-MM-DD HH:mm') : '',
+      x.notes || '',
+      personLabel(x.createdBy),
+      personLabel(x.assignedTo),
+      x.createdAt ? dayjs(x.createdAt).format('YYYY-MM-DD HH:mm') : '',
+    ]);
+    triggerCsvDownload(`employee-${id}-customer-followups.csv`, header, rows);
+  };
+
+  const exportLeadFollowUpsCsv = () => {
+    const header = [
+      'Lead',
+      'Company',
+      'Status',
+      'Type',
+      'Next follow-up',
+      'Notes',
+      'Created by',
+      'Assigned to',
+      'Created',
+    ];
+    const rows = leadFollowUps.map((x) => [
+      x.leadName || '',
+      x.companyName || '',
+      `${formatLeadPipelineStatus(x.status)}; ${followUpScheduleLabel(x.nextFollowUpDate)}`,
+      x.followUpType || '',
+      x.nextFollowUpDate ? dayjs(x.nextFollowUpDate).format('YYYY-MM-DD HH:mm') : '',
+      x.notes || '',
+      personLabel(x.createdBy),
+      personLabel(x.assignedTo),
+      x.createdAt ? dayjs(x.createdAt).format('YYYY-MM-DD HH:mm') : '',
+    ]);
+    triggerCsvDownload(`employee-${id}-lead-followups.csv`, header, rows);
   };
 
   if (loading) return <p className="text-sm text-slate-500">Loading employee details...</p>;
@@ -666,6 +942,319 @@ function UserDetailsPage() {
                 <tr>
                   <td colSpan={5} className="py-4 text-slate-500">
                     No visits found for selected filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === 'customerFollowup' && (
+        <div className="flux-card overflow-auto p-4 shadow-panel-lg">
+          <p className="mb-3 text-sm text-slate-600">
+            Customer follow-ups where this employee is assigned or recorded the entry. Use filters and Apply, then export the current list.
+          </p>
+          {customerFuError && <p className="mb-3 alert-error">{customerFuError}</p>}
+          <div className="mb-4 space-y-3">
+            <div className="flex flex-col flex-wrap gap-3 sm:flex-row sm:items-end">
+              <div className="form-field w-full min-w-0 shrink-0 sm:w-[min(200px,38%)] sm:max-w-[240px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Customer
+                </label>
+                <UiSelect
+                  value={cfCustomerId}
+                  onChange={setCfCustomerId}
+                  options={cfCustomerSelectOptions}
+                  searchable
+                />
+              </div>
+              <div className="form-field w-full min-w-0 shrink-0 sm:w-[min(180px,32%)] sm:max-w-[220px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Search customer / company
+                </label>
+                <input
+                  className="form-input"
+                  placeholder="Name, company, email…"
+                  value={cfSearch}
+                  onChange={(e) => setCfSearch(e.target.value)}
+                />
+              </div>
+              <div className="form-field w-full shrink-0 sm:w-[min(150px,34%)] sm:max-w-[170px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Status
+                </label>
+                <UiSelect
+                  value={cfCustomerStatus}
+                  onChange={setCfCustomerStatus}
+                  options={CUSTOMER_LIFECYCLE_FILTER_OPTIONS}
+                />
+              </div>
+              <div className="form-field w-full shrink-0 sm:w-[150px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Next follow-up from
+                </label>
+                <input type="date" className="form-input" value={cfFrom} onChange={(e) => setCfFrom(e.target.value)} />
+              </div>
+              <div className="form-field w-full shrink-0 sm:w-[150px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Next follow-up to
+                </label>
+                <input type="date" className="form-input" value={cfTo} onChange={(e) => setCfTo(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="flex flex-wrap items-end gap-2">
+                <button type="button" className="btn-secondary" onClick={() => void loadCustomerFollowUps()}>
+                  Apply filters
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={async () => {
+                    const t = followUpFilterToday();
+                    setCfSearch('');
+                    setCfFrom(t);
+                    setCfTo(t);
+                    setCfCustomerId('');
+                    setCfCustomerStatus('');
+                    setCfPage(1);
+                    if (!id) return;
+                    setCustomerFuLoading(true);
+                    setCustomerFuError('');
+                    try {
+                      const { data } = await apiClient.get('/customers/followups', {
+                        params: { userId: id, from: t, to: t },
+                      });
+                      setCustomerFollowUps(Array.isArray(data?.items) ? data.items : []);
+                    } catch (e) {
+                      setCustomerFuError(e.response?.data?.message || 'Unable to load customer follow-ups.');
+                    } finally {
+                      setCustomerFuLoading(false);
+                    }
+                  }}
+                >
+                  Clear filters
+                </button>
+                <button type="button" className="btn-primary" disabled={!customerFollowUps.length} onClick={exportCustomerFollowUpsCsv}>
+                  Export CSV
+                </button>
+              </div>
+              <TablePagination
+                page={cfPage}
+                pageSize={cfPageSize}
+                totalCount={customerFollowUps.length}
+                onPageChange={(nextPage) => setCfPage(Math.max(1, nextPage))}
+                onPageSizeChange={(nextSize) => {
+                  setCfPageSize(nextSize);
+                  setCfPage(1);
+                }}
+                pageSizeOptions={[10, 25, 50]}
+              />
+            </div>
+          </div>
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500">
+                <th className="py-2 pr-2">Customer</th>
+                <th className="py-2 pr-2">Company</th>
+                <th className="py-2 pr-2">Status</th>
+                <th className="py-2 pr-2">Type</th>
+                <th className="py-2 pr-2">Next follow-up</th>
+                <th className="py-2 pr-2">Notes</th>
+                <th className="py-2 pr-2">Created by</th>
+                <th className="py-2 pr-2">Assigned to</th>
+                <th className="py-2">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {customerFuLoading ? (
+                <tr>
+                  <td colSpan={9} className="py-4 text-slate-500">
+                    Loading…
+                  </td>
+                </tr>
+              ) : (
+                pagedCustomerFollowUps.map((x) => (
+                  <tr
+                    key={String(x.followUpId)}
+                    className="cursor-pointer border-t border-neutral-100 hover:bg-slate-50"
+                    onClick={() => navigate(`/dashboard/track/customers/${x.customerId}`)}
+                    title="Open customer"
+                  >
+                    <td className="py-2 pr-2">{x.customerName || '—'}</td>
+                    <td className="py-2 pr-2">{x.companyName || '—'}</td>
+                    <td className="max-w-[200px] py-2 pr-2">
+                      <div className="text-dark">{customerLifecycleShort(x)}</div>
+                      <div className="text-xs text-slate-500">{followUpScheduleLabel(x.nextFollowUpDate)}</div>
+                    </td>
+                    <td className="py-2 pr-2">{x.followUpType || '—'}</td>
+                    <td className="py-2 pr-2">
+                      {x.nextFollowUpDate ? dayjs(x.nextFollowUpDate).format('DD MMM YYYY hh:mm A') : '—'}
+                    </td>
+                    <td className="max-w-[220px] py-2 pr-2 whitespace-pre-wrap break-words">{x.notesPreview || x.notes || '—'}</td>
+                    <td className="py-2 pr-2">{personLabel(x.createdBy) || '—'}</td>
+                    <td className="py-2 pr-2">{personLabel(x.assignedTo) || '—'}</td>
+                    <td className="py-2">{x.createdAt ? dayjs(x.createdAt).format('DD MMM YYYY') : '—'}</td>
+                  </tr>
+                ))
+              )}
+              {!customerFuLoading && !customerFollowUps.length && (
+                <tr>
+                  <td colSpan={9} className="py-4 text-slate-500">
+                    No customer follow-ups for this employee with the current filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === 'leadFollowup' && (
+        <div className="flux-card overflow-auto p-4 shadow-panel-lg">
+          <p className="mb-3 text-sm text-slate-600">
+            Lead follow-ups where this employee is assigned or recorded the entry. Use filters and Apply, then export the current list.
+          </p>
+          {leadFuError && <p className="mb-3 alert-error">{leadFuError}</p>}
+          <div className="mb-4 space-y-3">
+            <div className="flex flex-col flex-wrap gap-3 sm:flex-row sm:items-end">
+              <div className="form-field w-full min-w-0 shrink-0 sm:w-[min(200px,36%)] sm:max-w-[240px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Lead
+                </label>
+                <UiSelect value={lfLeadId} onChange={setLfLeadId} options={lfLeadSelectOptions} searchable />
+              </div>
+              <div className="form-field w-full min-w-0 shrink-0 sm:w-[min(180px,32%)] sm:max-w-[220px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Search lead / company
+                </label>
+                <input
+                  className="form-input"
+                  placeholder="Lead or company…"
+                  value={lfSearch}
+                  onChange={(e) => setLfSearch(e.target.value)}
+                />
+              </div>
+              <div className="form-field w-full shrink-0 sm:w-[min(150px,34%)] sm:max-w-[170px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Status
+                </label>
+                <UiSelect value={lfStatus} onChange={setLfStatus} options={LEAD_FU_STATUS_OPTIONS} />
+              </div>
+              <div className="form-field w-full shrink-0 sm:w-[150px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Next follow-up from
+                </label>
+                <input type="date" className="form-input" value={lfFrom} onChange={(e) => setLfFrom(e.target.value)} />
+              </div>
+              <div className="form-field w-full shrink-0 sm:w-[150px]">
+                <label className="mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]">
+                  Next follow-up to
+                </label>
+                <input type="date" className="form-input" value={lfTo} onChange={(e) => setLfTo(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="flex flex-wrap items-end gap-2">
+                <button type="button" className="btn-secondary" onClick={() => void loadLeadFollowUps()}>
+                  Apply filters
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={async () => {
+                    const t = followUpFilterToday();
+                    setLfSearch('');
+                    setLfStatus('');
+                    setLfFrom(t);
+                    setLfTo(t);
+                    setLfLeadId('');
+                    setLfPage(1);
+                    if (!id) return;
+                    setLeadFuLoading(true);
+                    setLeadFuError('');
+                    try {
+                      const { data } = await apiClient.get('/leads/followups', {
+                        params: { userId: id, from: t, to: t },
+                      });
+                      setLeadFollowUps(Array.isArray(data?.items) ? data.items : []);
+                    } catch (e) {
+                      setLeadFuError(e.response?.data?.message || 'Unable to load lead follow-ups.');
+                    } finally {
+                      setLeadFuLoading(false);
+                    }
+                  }}
+                >
+                  Clear filters
+                </button>
+                <button type="button" className="btn-primary" disabled={!leadFollowUps.length} onClick={exportLeadFollowUpsCsv}>
+                  Export CSV
+                </button>
+              </div>
+              <TablePagination
+                page={lfPage}
+                pageSize={lfPageSize}
+                totalCount={leadFollowUps.length}
+                onPageChange={(nextPage) => setLfPage(Math.max(1, nextPage))}
+                onPageSizeChange={(nextSize) => {
+                  setLfPageSize(nextSize);
+                  setLfPage(1);
+                }}
+                pageSizeOptions={[10, 25, 50]}
+              />
+            </div>
+          </div>
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500">
+                <th className="py-2 pr-2">Lead</th>
+                <th className="py-2 pr-2">Company</th>
+                <th className="py-2 pr-2">Status</th>
+                <th className="py-2 pr-2">Type</th>
+                <th className="py-2 pr-2">Next follow-up</th>
+                <th className="py-2 pr-2">Notes</th>
+                <th className="py-2 pr-2">Created by</th>
+                <th className="py-2 pr-2">Assigned to</th>
+                <th className="py-2">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leadFuLoading ? (
+                <tr>
+                  <td colSpan={9} className="py-4 text-slate-500">
+                    Loading…
+                  </td>
+                </tr>
+              ) : (
+                pagedLeadFollowUps.map((x) => (
+                  <tr
+                    key={String(x.followUpId)}
+                    className="cursor-pointer border-t border-neutral-100 hover:bg-slate-50"
+                    onClick={() => navigate(`/dashboard/track/leads/${x.leadId}`)}
+                    title="Open lead"
+                  >
+                    <td className="py-2 pr-2">{x.leadName || '—'}</td>
+                    <td className="py-2 pr-2">{x.companyName || '—'}</td>
+                    <td className="max-w-[200px] py-2 pr-2">
+                      <div className="text-dark">{formatLeadPipelineStatus(x.status)}</div>
+                      <div className="text-xs text-slate-500">{followUpScheduleLabel(x.nextFollowUpDate)}</div>
+                    </td>
+                    <td className="py-2 pr-2">{x.followUpType || '—'}</td>
+                    <td className="py-2 pr-2">
+                      {x.nextFollowUpDate ? dayjs(x.nextFollowUpDate).format('DD MMM YYYY hh:mm A') : '—'}
+                    </td>
+                    <td className="max-w-[220px] py-2 pr-2 whitespace-pre-wrap break-words">{x.notesPreview || x.notes || '—'}</td>
+                    <td className="py-2 pr-2">{personLabel(x.createdBy) || '—'}</td>
+                    <td className="py-2 pr-2">{personLabel(x.assignedTo) || '—'}</td>
+                    <td className="py-2">{x.createdAt ? dayjs(x.createdAt).format('DD MMM YYYY') : '—'}</td>
+                  </tr>
+                ))
+              )}
+              {!leadFuLoading && !leadFollowUps.length && (
+                <tr>
+                  <td colSpan={9} className="py-4 text-slate-500">
+                    No lead follow-ups for this employee with the current filters.
                   </td>
                 </tr>
               )}

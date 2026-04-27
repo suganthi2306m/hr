@@ -21,7 +21,7 @@ import 'package:track/services/geo/movement_classification_service.dart';
 import 'package:track/models/task.dart';
 import 'package:track/screens/geo/arrived_screen.dart';
 import 'package:track/screens/geo/exit_ride_bottom_sheet.dart';
-import 'package:track/screens/geo/task_detail_screen.dart';
+import 'package:track/screens/geo/simple_task_info_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:track/utils/date_display_util.dart';
@@ -1600,9 +1600,8 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen>
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => TaskDetailScreen(
+                      builder: (context) => SimpleTaskInfoScreen(
                         task: widget.task!,
-                        fromRideScreen: true,
                       ),
                     ),
                   );

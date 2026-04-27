@@ -16,7 +16,7 @@ import 'package:track/screens/geo/pin_destination_map_screen.dart';
 import 'package:track/services/task_service.dart';
 import 'package:track/services/presence_tracking_service.dart';
 import 'package:track/screens/geo/live_tracking_screen.dart';
-import 'package:track/screens/geo/task_detail_screen.dart';
+import 'package:track/screens/geo/simple_task_info_screen.dart';
 import 'package:track/utils/error_message_utils.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:track/widgets/app_tab_loader.dart';
@@ -459,8 +459,7 @@ class _StartRideScreenState extends State<StartRideScreen> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) =>
-                        TaskDetailScreen(task: _task, fromRideScreen: true),
+                    builder: (context) => SimpleTaskInfoScreen(task: _task),
                   ),
                 );
               },

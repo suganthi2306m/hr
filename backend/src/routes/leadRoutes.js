@@ -8,6 +8,7 @@ const {
   addFollowUp,
   convertLeadToCustomer,
   listFollowUps,
+  listLeadFollowUpsHistory,
   updateFollowUp,
   listUpcomingFollowUps,
 } = require('../controllers/leadController');
@@ -19,6 +20,7 @@ router.get('/', listLeads);
 router.post('/', createLead);
 router.get('/followups', listFollowUps);
 router.get('/followups/upcoming', listUpcomingFollowUps);
+router.get('/:id/followups/history', listLeadFollowUpsHistory);
 router.get('/:id', getLeadById);
 router.put('/:id', updateLead);
 router.post('/:id/convert', convertLeadToCustomer);

@@ -104,6 +104,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen>
     with MainShellSwipeNavigation {
+  static const bool _showOurProductsCard = false;
   static const Color _bg = Colors.white;
   static const Color _card = Colors.white;
   static const Color _ink = Color(0xFF1A1A1A);
@@ -224,9 +225,18 @@ class _DashboardScreenState extends State<DashboardScreen>
     List<AttendanceRecord> history,
   ) async {
     if (history.isEmpty) return;
-    final punchedIn = history.first.checkOutTime == null;
-    if (punchedIn) {
-      final loc = history.first.checkInLocation;
+    final now = DateTime.now();
+    AttendanceRecord? todayOpen;
+    for (final r in history) {
+      if (!_sameCalendarDay(r.checkInTime, now)) continue;
+      if (r.checkOutTime != null) continue;
+      if (todayOpen == null || r.checkInTime.isAfter(todayOpen!.checkInTime)) {
+        todayOpen = r;
+      }
+    }
+    final punchedInToday = todayOpen != null;
+    if (punchedInToday) {
+      final loc = todayOpen!.checkInLocation;
       if (loc != null && (loc.lat != 0 || loc.lng != 0)) {
         await PresenceTrackingService().pinOfficeZoneAtCheckIn(loc.lat, loc.lng);
       }
@@ -240,12 +250,16 @@ class _DashboardScreenState extends State<DashboardScreen>
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
-  AttendanceRecord? get _latestAttendance =>
-      _attendanceHistory.isEmpty ? null : _attendanceHistory.first;
-
-  bool get _hasOpenAttendanceSession {
-    final latest = _latestAttendance;
-    return latest != null && latest.checkOutTime == null;
+  /// Open check-in whose **check-in day** is today (local). Ignores yesterday’s open row.
+  AttendanceRecord? get _todayOpenAttendance {
+    final now = DateTime.now();
+    AttendanceRecord? pick;
+    for (final r in _attendanceHistory) {
+      if (!_sameCalendarDay(r.checkInTime, now)) continue;
+      if (r.checkOutTime != null) continue;
+      if (pick == null || r.checkInTime.isAfter(pick.checkInTime)) pick = r;
+    }
+    return pick;
   }
 
   /// Latest record for today with both check-in and check-out (completed day).
@@ -309,8 +323,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildTodayAttendanceCard(BuildContext context) {
-    final latest = _latestAttendance;
-    final open = _hasOpenAttendanceSession;
+    final todayOpen = _todayOpenAttendance;
     final todayDone = _todayCompletedAttendance;
 
     final List<Widget> leftChildren = [
@@ -327,7 +340,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
     late final Widget rightTrailing;
 
-    if (open && latest != null) {
+    if (todayOpen != null) {
       leftChildren.add(
         Text(
           'You are checked in',
@@ -338,25 +351,10 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         ),
       );
-      if (!_sameCalendarDay(latest.checkInTime, DateTime.now())) {
-        leftChildren.add(
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              'Started ${DateDisplayUtil.formatDateOnly(latest.checkInTime)}',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: _ink.withValues(alpha: 0.5),
-              ),
-            ),
-          ),
-        );
-      }
       leftChildren.add(
         _buildAttendanceTimeRow(
           'Check-in',
-          DateDisplayUtil.formatForDisplay(latest.checkInTime, 'hh:mm a'),
+          DateDisplayUtil.formatForDisplay(todayOpen.checkInTime, 'hh:mm a'),
         ),
       );
       leftChildren.add(
@@ -481,8 +479,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     final Widget target = switch (index) {
       0 => const AttendanceSummaryScreen(),
       2 => const VisitsScreen(),
-      3 => const CompanyCustomersScreen(),
-      4 => const LeadListScreen(),
+      3 => const LeadListScreen(),
+      4 => const CompanyCustomersScreen(),
       5 => const ProfileScreen(),
       6 => const SettingsScreen(),
       _ => const DashboardScreen(),
@@ -1159,8 +1157,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                       _buildHeader(context),
                       const SizedBox(height: 22),
                       _yellowProgressCard(summary),
-                      const SizedBox(height: 16),
-                      _buildOurProductsCard(context),
+                      if (_showOurProductsCard) ...[
+                        const SizedBox(height: 16),
+                        _buildOurProductsCard(context),
+                      ],
                       if (_productHome.banners.isNotEmpty || _productHome.highlighted.isNotEmpty) ...[
                         const SizedBox(height: 22),
                         _buildProductsSpotlight(context),

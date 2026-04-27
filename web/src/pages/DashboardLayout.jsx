@@ -178,6 +178,13 @@ function DashboardLayout() {
     pathSegments[0] === 'operations' && pathSegments[1] === 'attendance' && pathSegments[2] === 'overtime';
   const isOurProductsDash = pathSegments[0] === 'our-products';
   const isSupportDash = pathSegments[0] === 'support';
+  const isFieldTasksList =
+    pathSegments.length === 2 && pathSegments[0] === 'track' && pathSegments[1] === 'fieldtasks';
+  const isFieldTaskDetailsPage =
+    pathSegments.length === 3 &&
+    pathSegments[0] === 'track' &&
+    pathSegments[1] === 'fieldtasks' &&
+    pathSegments[2] !== 'import';
   const pageTitle = isEmployeeOnboarding
     ? pathSegments[1] === 'new'
       ? 'Add employee'
@@ -196,9 +203,13 @@ function DashboardLayout() {
               ? 'Our products'
               : isSupportDash
                 ? 'Support'
-                : pathSegments.length
-                  ? prettifySegment(pathSegments[pathSegments.length - 1])
-                  : 'Dashboard';
+                : isFieldTasksList
+                  ? 'Field tasks'
+                  : isFieldTaskDetailsPage
+                    ? 'Task details'
+                    : pathSegments.length
+                      ? prettifySegment(pathSegments[pathSegments.length - 1])
+                      : 'Dashboard';
 
   useEffect(() => {
     if (['superadmin', 'mainsuperadmin'].includes(admin?.role)) {
@@ -244,8 +255,18 @@ function DashboardLayout() {
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
-      <main className="relative min-w-0 flex-1 overflow-x-hidden p-3 sm:p-4 md:min-h-screen md:rounded-[2rem] md:bg-flux-panel md:p-6 md:shadow-panel-lg lg:p-8">
-        <div className="mb-4 flex min-h-[2.75rem] items-center justify-between gap-2 sm:gap-3">
+      <main
+        className={
+          isFieldTaskDetailsPage
+            ? 'relative min-w-0 flex-1 overflow-x-hidden md:min-h-screen md:rounded-none md:bg-flux-panel md:p-0 md:shadow-none'
+            : 'relative min-w-0 flex-1 overflow-x-hidden p-3 sm:p-4 md:min-h-screen md:rounded-[2rem] md:bg-flux-panel md:p-6 md:shadow-panel-lg lg:p-8'
+        }
+      >
+        <div
+          className={`mb-4 flex min-h-[2.75rem] items-center justify-between gap-2 sm:gap-3 ${
+            isFieldTaskDetailsPage ? 'border-b border-slate-200/80 px-4 pb-4 pt-4 sm:px-5 md:px-6 md:pt-5' : ''
+          }`}
+        >
           <div className="flex min-w-0 flex-1 flex-col justify-center">
             {isOrganizationSetupPage ? (
               <h1 className="min-w-0 truncate text-xl font-black tracking-tight sm:text-2xl">
@@ -260,6 +281,11 @@ function DashboardLayout() {
             ) : isOurProductsDash || isSupportDash ? (
               <h1 className="min-w-0 truncate text-xl font-black tracking-tight sm:text-2xl">
                 <span className="text-primary">{isSupportDash ? 'Support' : 'Our products'}</span>
+              </h1>
+            ) : isFieldTaskDetailsPage ? (
+              <h1 className="truncate text-xl font-black tracking-tight sm:text-2xl">
+                <span className="text-primary">Task</span>
+                <span className="text-dark"> details</span>
               </h1>
             ) : (
               <TwoToneTitle text={pageTitle} />

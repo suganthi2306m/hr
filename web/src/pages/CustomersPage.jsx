@@ -6,6 +6,7 @@ import apiClient from '../api/client';
 import LocationLoadingIndicator from '../components/common/LocationLoadingIndicator';
 import SelectionCountBadge from '../components/common/SelectionCountBadge';
 import SlideOverPanel from '../components/common/SlideOverPanel';
+import TablePagination from '../components/common/TablePagination';
 import UiSelect from '../components/common/UiSelect';
 import MapLocationPickerScreen from '../components/map/MapLocationPickerScreen';
 import { useGoogleMaps } from '../context/GoogleMapsContext';
@@ -25,8 +26,6 @@ const DIAL_OPTIONS = [
 const defaultMapCenter = { lat: 20.5937, lng: 78.9629 };
 const MAP_AREA_HEIGHT = 'min(72vh,640px)';
 const mapContainerStyle = { width: '100%', height: '100%' };
-const PAGE_SIZE = 12;
-
 const emptyForm = () => ({
   customerName: '',
   countryCode: '91',
@@ -136,6 +135,7 @@ function CustomersPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedCustomerIds, setSelectedCustomerIds] = useState([]);
   const [directoryPage, setDirectoryPage] = useState(1);
+  const [directoryPageSize, setDirectoryPageSize] = useState(12);
   const [mapPlaceQuery, setMapPlaceQuery] = useState('');
   const [locationsGoHint, setLocationsGoHint] = useState('');
   const [mapActiveId, setMapActiveId] = useState(null);
@@ -153,6 +153,13 @@ function CustomersPage() {
   const [lastMapPin, setLastMapPin] = useState(null);
 
   const { isLoaded, loadError: mapsLoadError } = useGoogleMaps();
+
+  const resetCustomerDirectoryFilters = useCallback(() => {
+    setCustomerQuery('');
+    setStatusFilter('all');
+    setSelectedCustomerIds([]);
+    setDirectoryPage(1);
+  }, []);
 
   const loadCustomers = useCallback(async () => {
     setListLoadState({ status: 'loading', message: '' });
@@ -184,11 +191,11 @@ function CustomersPage() {
     () => filteredDirectory.filter((c) => selectedCustomerIds.includes(String(c._id))),
     [filteredDirectory, selectedCustomerIds],
   );
-  const directoryTotalPages = Math.max(1, Math.ceil(filteredDirectory.length / PAGE_SIZE));
+  const directoryTotalPages = Math.max(1, Math.ceil(filteredDirectory.length / directoryPageSize));
   const pagedDirectory = useMemo(() => {
-    const start = (directoryPage - 1) * PAGE_SIZE;
-    return filteredDirectory.slice(start, start + PAGE_SIZE);
-  }, [filteredDirectory, directoryPage]);
+    const start = (directoryPage - 1) * directoryPageSize;
+    return filteredDirectory.slice(start, start + directoryPageSize);
+  }, [filteredDirectory, directoryPage, directoryPageSize]);
 
   useEffect(() => {
     setDirectoryPage(1);
@@ -663,6 +670,18 @@ function CustomersPage() {
             </div>
             <button
               type="button"
+              className="btn-secondary inline-flex h-10 w-10 shrink-0 items-center justify-center p-0"
+              title="Clear search and status filters"
+              aria-label="Clear search and status filters"
+              onClick={() => resetCustomerDirectoryFilters()}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden>
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <path d="M21 3v6h-6" />
+              </svg>
+            </button>
+            <button
+              type="button"
               onClick={() => navigate('/dashboard/track/customers/import')}
               className="btn-primary inline-flex shrink-0 items-center gap-2 whitespace-nowrap"
             >
@@ -832,29 +851,19 @@ function CustomersPage() {
               )}
             </tbody>
           </table>
-          {filteredDirectory.length > PAGE_SIZE && (
-            <div className="mt-4 flex justify-end">
-              <nav className="inline-flex items-center gap-1 rounded-xl border border-neutral-200 bg-flux-panel px-1.5 py-1 shadow-sm">
-                <button
-                  type="button"
-                  className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-white disabled:opacity-40"
-                  disabled={directoryPage <= 1}
-                  onClick={() => setDirectoryPage((p) => Math.max(1, p - 1))}
-                >
-                  Prev
-                </button>
-                <span className="px-2 text-sm text-slate-600">
-                  {directoryPage} / {directoryTotalPages}
-                </span>
-                <button
-                  type="button"
-                  className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-white disabled:opacity-40"
-                  disabled={directoryPage >= directoryTotalPages}
-                  onClick={() => setDirectoryPage((p) => Math.min(directoryTotalPages, p + 1))}
-                >
-                  Next
-                </button>
-              </nav>
+          {listLoadState.status === 'ok' && (
+            <div className="mt-4">
+              <TablePagination
+                page={directoryPage}
+                pageSize={directoryPageSize}
+                totalCount={filteredDirectory.length}
+                onPageChange={(next) => setDirectoryPage(Math.max(1, next))}
+                onPageSizeChange={(nextSize) => {
+                  setDirectoryPageSize(nextSize);
+                  setDirectoryPage(1);
+                }}
+                pageSizeOptions={[10, 12, 25, 50]}
+              />
             </div>
           )}
         </div>

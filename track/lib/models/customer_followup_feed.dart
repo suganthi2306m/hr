@@ -1,3 +1,5 @@
+import 'package:track/utils/date_display_util.dart';
+
 class CustomerFollowUpFeedItem {
   final String followUpId;
   final String customerId;
@@ -33,12 +35,11 @@ class CustomerFollowUpFeedItem {
       customerName: (json['customerName'] ?? '').toString(),
       companyName: (json['companyName'] ?? '').toString(),
       followUpType: (json['followUpType'] ?? '').toString(),
-      nextFollowUpDate:
-          json['nextFollowUpDate'] != null ? DateTime.tryParse(json['nextFollowUpDate'].toString()) : null,
+      nextFollowUpDate: DateDisplayUtil.parseFromApiAsLocal(json['nextFollowUpDate']),
       notes: (json['notes'] ?? '').toString(),
       notesPreview: (json['notesPreview'] ?? '').toString(),
       createdByName: (createdBy['name'] ?? createdBy['email'] ?? '').toString(),
-      createdAt: json['createdAt'] != null ? DateTime.tryParse(json['createdAt'].toString()) : null,
+      createdAt: DateDisplayUtil.parseFromApiAsLocal(json['createdAt']),
     );
   }
 }

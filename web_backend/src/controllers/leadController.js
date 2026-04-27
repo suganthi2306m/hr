@@ -390,15 +390,44 @@ async function listFollowUps(req, res, next) {
   try {
     const company = await getCompanyForAdmin(req.admin._id);
     if (!company?._id) return res.json({ items: [] });
-    const leadFilter = { companyId: company._id, convertedToCustomer: { $ne: true }, status: { $ne: 'customer' } };
+    const leadIdParam = String(req.query.leadId || '').trim();
+    const userIdParam = String(req.query.userId || '').trim();
+    const noteSearch = String(req.query.noteSearch || '').trim();
+
+    const baseLeadScope = { companyId: company._id, convertedToCustomer: { $ne: true }, status: { $ne: 'customer' } };
     const status = normalizeStatus(req.query.status, '');
-    if (status) leadFilter.status = status;
     const search = String(req.query.search || '').trim();
-    if (search) {
-      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      leadFilter.$or = [{ companyName: rx }, { leadName: rx }];
+    const companyNameExact = String(req.query.companyName || '').trim();
+
+    let leadRows;
+    if (mongoose.Types.ObjectId.isValid(leadIdParam)) {
+      const leadFilterOne = { ...baseLeadScope, _id: leadIdParam };
+      if (status) leadFilterOne.status = status;
+      const one = await Lead.findOne(leadFilterOne).select('_id leadName companyName status').lean();
+      if (!one) return res.json({ items: [] });
+      if (companyNameExact && String(one.companyName || '').trim() !== companyNameExact) {
+        return res.json({ items: [] });
+      }
+      if (search) {
+        const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        if (!rx.test(String(one.companyName || '')) && !rx.test(String(one.leadName || ''))) return res.json({ items: [] });
+      }
+      leadRows = [one];
+    } else {
+      const parts = [{ companyId: company._id, convertedToCustomer: { $ne: true } }];
+      if (status) {
+        parts.push({ status });
+      } else {
+        parts.push({ status: { $ne: 'customer' } });
+      }
+      if (companyNameExact) parts.push({ companyName: companyNameExact });
+      if (search) {
+        const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        parts.push({ $or: [{ companyName: rx }, { leadName: rx }] });
+      }
+      const leadFilter = parts.length === 1 ? parts[0] : { $and: parts };
+      leadRows = await Lead.find(leadFilter).select('_id leadName companyName status').lean();
     }
-    const leadRows = await Lead.find(leadFilter).select('_id leadName companyName status').lean();
     const leadById = new Map(leadRows.map((x) => [String(x._id), x]));
     const leadIds = leadRows.map((x) => x._id);
     if (!leadIds.length) return res.json({ items: [] });
@@ -410,6 +439,15 @@ async function listFollowUps(req, res, next) {
       q.nextFollowUpAt = {};
       if (from) q.nextFollowUpAt.$gte = startOfDay(from);
       if (to) q.nextFollowUpAt.$lte = endOfDay(to);
+    }
+    if (noteSearch) {
+      const nrx = new RegExp(noteSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      q.note = nrx;
+    }
+    if (userIdParam && mongoose.Types.ObjectId.isValid(userIdParam)) {
+      const uid = await validateAssignee(company._id, userIdParam);
+      if (!uid) return res.json({ items: [] });
+      q.$or = [{ assignedToUserId: uid }, { createdByUserId: uid }];
     }
 
     const rows = await LeadFollowUp.find(q)

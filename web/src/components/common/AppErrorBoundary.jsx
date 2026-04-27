@@ -1,6 +1,19 @@
 import { Component } from 'react';
 import logoUrl from '../../assets/logo.png';
 
+const CHUNK_RELOAD_AT_KEY = 'livetrack_chunk_reload_at';
+
+/** After a new Vercel deploy, old tabs still point at hashed chunks that no longer exist → dynamic import fails. */
+function isStaleBuildChunkError(message) {
+  const m = String(message || '');
+  return (
+    /Failed to fetch dynamically imported module/i.test(m) ||
+    /Loading chunk [\w-]+ failed/i.test(m) ||
+    /Importing a module script failed/i.test(m) ||
+    /error loading dynamically imported module/i.test(m)
+  );
+}
+
 class AppErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -28,12 +41,40 @@ class AppErrorBoundary extends Component {
   }
 
   handleWindowError = (event) => {
+    // Missing lazy-chunk script often has no `error` object; import() rejection is handled below.
+    if (!event?.error) {
+      const t = event?.target;
+      if (t && (t.tagName === 'SCRIPT' || t.tagName === 'LINK')) return;
+    }
+    const msg = String(event?.message || event?.error?.message || '');
+    if (isStaleBuildChunkError(msg)) {
+      this.tryReloadForStaleChunk();
+      return;
+    }
     const nextError = event?.error || new Error(event?.message || 'Unexpected runtime error');
     this.setState({ hasError: true, error: nextError });
   };
 
+  tryReloadForStaleChunk() {
+    try {
+      const last = Number(sessionStorage.getItem(CHUNK_RELOAD_AT_KEY) || 0);
+      if (Date.now() - last < 8000) return;
+      sessionStorage.setItem(CHUNK_RELOAD_AT_KEY, String(Date.now()));
+    } catch {
+      return;
+    }
+    window.location.reload();
+  }
+
   handleUnhandledRejection = (event) => {
     const reason = event?.reason;
+    const msg =
+      reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : String(reason || '');
+    if (isStaleBuildChunkError(msg)) {
+      event.preventDefault?.();
+      this.tryReloadForStaleChunk();
+      return;
+    }
     const nextError =
       reason instanceof Error
         ? reason
@@ -62,7 +103,8 @@ class AppErrorBoundary extends Component {
             <h1 className="text-lg font-bold text-slate-900">Something went wrong</h1>
           </div>
           <p className="text-sm text-slate-600">
-            This screen failed to load. Please reload once. If this keeps happening, share this message with the team.
+            This screen failed to load. After a new deployment, try a hard refresh (Ctrl+Shift+R) or Reload once so the
+            browser fetches the latest scripts. If this keeps happening, share this message with the team.
           </p>
           <p className="mt-3 rounded-lg bg-slate-100 px-3 py-2 font-mono text-xs text-slate-700">{message}</p>
           <div className="mt-5 flex flex-wrap gap-2">

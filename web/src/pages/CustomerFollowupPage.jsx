@@ -1,6 +1,45 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import dayjs from 'dayjs';
 import apiClient from '../api/client';
+import TablePagination from '../components/common/TablePagination';
+import UiSelect from '../components/common/UiSelect';
+import { employeeSelectLabel } from '../utils/employeeSelectLabel';
+
+const CUSTOMER_LIFECYCLE_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
+];
+
+function csvEscape(value) {
+  const s = value == null ? '' : String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function downloadCsv(filename, header, rows) {
+  const body = [header.map(csvEscape).join(','), ...rows.map((r) => r.map(csvEscape).join(','))].join('\n');
+  const blob = new Blob([`\uFEFF${body}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function personCell(u) {
+  if (!u) return '—';
+  return u.name || u.email || '—';
+}
+
+function statusCell(row) {
+  const life = String(row?.customerStatus || 'active').toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+  const seg = String(row?.segment || 'lead').replace(/_/g, ' ');
+  const segT = seg.replace(/\b\w/g, (c) => c.toUpperCase());
+  return `${life} · ${segT}`;
+}
 
 export default function CustomerFollowupPage() {
   const navigate = useNavigate();
@@ -10,8 +49,11 @@ export default function CustomerFollowupPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [from, setFrom] = useState(() => dayjs().format('YYYY-MM-DD'));
+  const [to, setTo] = useState(() => dayjs().format('YYYY-MM-DD'));
+  const [filterCompany, setFilterCompany] = useState('');
+  const [filterUserId, setFilterUserId] = useState('');
+  const [customerLifecycle, setCustomerLifecycle] = useState('');
   const [selected, setSelected] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [formCustomerId, setFormCustomerId] = useState('');
@@ -20,18 +62,32 @@ export default function CustomerFollowupPage() {
   const [formNext, setFormNext] = useState('');
   const [formAssignedTo, setFormAssignedTo] = useState('');
   const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
-  const load = async () => {
+  const load = async (filterOverride) => {
     setLoading(true);
     setError('');
+    const effectiveSearch = filterOverride && 'search' in filterOverride ? filterOverride.search : query;
+    const effectiveCompany = filterOverride && 'companyName' in filterOverride ? filterOverride.companyName : filterCompany;
+    const effectiveUserId = filterOverride && 'userId' in filterOverride ? filterOverride.userId : filterUserId;
+    const effectiveLifecycle =
+      filterOverride && 'customerStatus' in filterOverride ? filterOverride.customerStatus : customerLifecycle;
+    const effectiveFrom = filterOverride && 'from' in filterOverride ? filterOverride.from : from;
+    const effectiveTo = filterOverride && 'to' in filterOverride ? filterOverride.to : to;
     try {
       const { data } = await apiClient.get('/customers/followups', {
         params: {
-          search: query || undefined,
-          ...(from && to ? { from, to } : from ? { from } : to ? { to } : {}),
+          search: String(effectiveSearch || '').trim() || undefined,
+          companyName: effectiveCompany || undefined,
+          userId: effectiveUserId || undefined,
+          customerStatus: effectiveLifecycle || undefined,
+          from: effectiveFrom || undefined,
+          to: effectiveTo || undefined,
         },
       });
       setItems(Array.isArray(data?.items) ? data.items : []);
+      setPage(1);
     } catch (e) {
       setError(e?.response?.data?.message || 'Unable to load follow-ups.');
     } finally {
@@ -58,8 +114,13 @@ export default function CustomerFollowupPage() {
   };
 
   useEffect(() => {
+    void loadCustomers();
+    void loadUsers();
+  }, []);
+
+  useEffect(() => {
     void load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount load only
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- initial load; filters use Apply
   }, []);
 
   useEffect(() => {
@@ -69,18 +130,59 @@ export default function CustomerFollowupPage() {
     }
   }, [showAdd]);
 
-  const analytics = useMemo(() => {
-    const perUser = new Map();
-    let pending = 0;
-    let completed = 0;
-    items.forEach((x) => {
-      const user = x.createdBy?.name || x.createdBy?.email || 'Unknown';
-      perUser.set(user, (perUser.get(user) || 0) + 1);
-      if (x.nextFollowUpDate && new Date(x.nextFollowUpDate).getTime() > Date.now()) pending += 1;
-      else completed += 1;
+  const companySelectOptions = useMemo(() => {
+    const names = new Set();
+    customers.forEach((c) => {
+      const n = String(c.companyName || '').trim();
+      if (n) names.add(n);
     });
-    return { perUser: [...perUser.entries()], pending, completed };
-  }, [items]);
+    const sorted = [...names].sort((a, b) => a.localeCompare(b));
+    return [{ value: '', label: 'All companies' }, ...sorted.map((n) => ({ value: n, label: n }))];
+  }, [customers]);
+
+  const userSelectOptions = useMemo(() => {
+    const sorted = [...users].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    return [
+      { value: '', label: 'All employees' },
+      ...sorted.map((u) => ({ value: String(u._id), label: employeeSelectLabel(u) })),
+    ];
+  }, [users]);
+
+  const pagedItems = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, page, pageSize]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    if (page > totalPages) setPage(totalPages);
+  }, [items.length, pageSize, page]);
+
+  const exportCsv = () => {
+    const header = [
+      'Customer',
+      'Company',
+      'Status',
+      'Type',
+      'Next follow-up',
+      'Notes',
+      'Created by',
+      'Assigned to',
+      'Created date',
+    ];
+    const rows = items.map((row) => [
+      row.customerName || '',
+      row.companyName || '',
+      statusCell(row),
+      row.followUpType || '',
+      row.nextFollowUpDate ? dayjs(row.nextFollowUpDate).format('YYYY-MM-DD HH:mm') : '',
+      row.notes || '',
+      personCell(row.createdBy),
+      personCell(row.assignedTo),
+      row.createdAt ? dayjs(row.createdAt).format('YYYY-MM-DD HH:mm') : '',
+    ]);
+    downloadCsv(`customer-followups-${dayjs().format('YYYY-MM-DD')}.csv`, header, rows);
+  };
 
   const submitAdd = async () => {
     if (!formCustomerId) {
@@ -115,47 +217,73 @@ export default function CustomerFollowupPage() {
     }
   };
 
+  const labelCls =
+    'mb-1 block text-[10px] font-semibold uppercase leading-tight tracking-wide text-primary sm:text-[11px]';
+
   return (
     <section className="space-y-4">
-      <div className="flux-card p-4 shadow-panel-lg">
-        <h2 className="text-lg font-bold text-dark">Customer follow-up</h2>
-        <p className="mt-1 text-sm text-slate-500">Each entry is linked to a customer. Use optional date range to filter by next follow-up.</p>
-      </div>
-      <div className="flux-card p-4 shadow-panel-lg">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="grid flex-1 gap-2 md:grid-cols-4">
+      {error && <p className="alert-error">{error}</p>}
+      <div className="flux-card space-y-3 p-4 shadow-panel-lg">
+        <div className="flex flex-col flex-wrap gap-3 xl:flex-row xl:items-end">
+          <div className="form-field w-full min-w-0 shrink-0 xl:w-[min(200px,20%)] xl:max-w-[240px]">
+            <label className={labelCls}>Company</label>
+            <UiSelect value={filterCompany} onChange={setFilterCompany} options={companySelectOptions} searchable />
+          </div>
+          <div className="form-field w-full min-w-0 shrink-0 xl:w-[min(200px,20%)] xl:max-w-[240px]">
+            <label className={labelCls}>Employee</label>
+            <UiSelect value={filterUserId} onChange={setFilterUserId} options={userSelectOptions} searchable />
+          </div>
+          <div className="form-field w-full shrink-0 xl:w-[min(140px,14%)] xl:max-w-[170px]">
+            <label className={labelCls}>Status</label>
+            <UiSelect value={customerLifecycle} onChange={setCustomerLifecycle} options={CUSTOMER_LIFECYCLE_OPTIONS} />
+          </div>
+          <div className="form-field w-full min-w-0 shrink-0 xl:w-[min(180px,22%)] xl:max-w-[220px]">
+            <label className={labelCls}>Search customer / company</label>
             <input
-              className="form-input md:col-span-2"
-              placeholder="Search customer / company"
+              className="form-input"
+              placeholder="Name, email, number…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <input type="date" className="form-input" value={from} onChange={(e) => setFrom(e.target.value)} title="From (optional)" />
-            <input type="date" className="form-input" value={to} onChange={(e) => setTo(e.target.value)} title="To (optional)" />
           </div>
-          <div className="flex gap-2">
+          <div className="form-field w-full shrink-0 xl:w-[150px]">
+            <label className={labelCls}>Next follow-up from</label>
+            <input type="date" className="form-input" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </div>
+          <div className="form-field w-full shrink-0 xl:w-[150px]">
+            <label className={labelCls}>Next follow-up to</label>
+            <input type="date" className="form-input" value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className="btn-secondary"
-              title="Clear dates — list all"
-              onClick={async () => {
-                setFrom('');
-                setTo('');
-                setLoading(true);
-                setError('');
-                try {
-                  const { data } = await apiClient.get('/customers/followups', {
-                    params: { search: query || undefined },
-                  });
-                  setItems(Array.isArray(data?.items) ? data.items : []);
-                } catch (e) {
-                  setError(e?.response?.data?.message || 'Unable to load follow-ups.');
-                } finally {
-                  setLoading(false);
-                }
+              className="btn-secondary inline-flex h-10 w-10 shrink-0 items-center justify-center p-0"
+              title="Reset filters to today and reload"
+              aria-label="Reset filters to today and reload"
+              onClick={() => {
+                const t = dayjs().format('YYYY-MM-DD');
+                setQuery('');
+                setFilterCompany('');
+                setFilterUserId('');
+                setCustomerLifecycle('');
+                setFrom(t);
+                setTo(t);
+                void load({
+                  search: '',
+                  companyName: '',
+                  userId: '',
+                  customerStatus: '',
+                  from: t,
+                  to: t,
+                });
               }}
             >
-              Clear dates
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden>
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <path d="M21 3v6h-6" />
+              </svg>
             </button>
             <button type="button" className="btn-primary" onClick={() => void load()}>
               Apply
@@ -163,20 +291,21 @@ export default function CustomerFollowupPage() {
             <button type="button" className="btn-primary" onClick={() => setShowAdd(true)}>
               Add follow-up
             </button>
+            <button type="button" className="btn-primary" disabled={!items.length} onClick={exportCsv}>
+              Export CSV
+            </button>
           </div>
-        </div>
-      </div>
-      {error && <p className="alert-error">{error}</p>}
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="flux-card p-3 shadow-panel-lg">
-          <p className="text-xs text-slate-500">Pending vs completed</p>
-          <p className="text-sm font-semibold text-dark">
-            Pending: {analytics.pending} · Completed: {analytics.completed}
-          </p>
-        </div>
-        <div className="flux-card p-3 shadow-panel-lg">
-          <p className="text-xs text-slate-500">Follow-ups per user</p>
-          <p className="text-sm text-dark">{analytics.perUser.slice(0, 2).map(([u, c]) => `${u}: ${c}`).join(' · ') || '-'}</p>
+          <TablePagination
+            page={page}
+            pageSize={pageSize}
+            totalCount={items.length}
+            onPageChange={(nextPage) => setPage(Math.max(1, nextPage))}
+            onPageSizeChange={(nextSize) => {
+              setPageSize(nextSize);
+              setPage(1);
+            }}
+            pageSizeOptions={[10, 25, 50]}
+          />
         </div>
       </div>
       <div className="flux-card overflow-hidden p-4 shadow-panel-lg">
@@ -186,13 +315,13 @@ export default function CustomerFollowupPage() {
               <tr className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <th className="px-3 py-2">Customer</th>
                 <th className="px-3 py-2">Company</th>
+                <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Type</th>
                 <th className="px-3 py-2">Next follow-up</th>
                 <th className="px-3 py-2">Notes</th>
                 <th className="px-3 py-2">Created by</th>
                 <th className="px-3 py-2">Assigned to</th>
                 <th className="px-3 py-2">Created date</th>
-                <th className="px-3 py-2">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -203,7 +332,7 @@ export default function CustomerFollowupPage() {
                   </td>
                 </tr>
               ) : items.length ? (
-                items.map((row) => (
+                pagedItems.map((row) => (
                   <tr
                     key={row.followUpId}
                     className="cursor-pointer border-t border-neutral-100 hover:bg-primary/5"
@@ -211,21 +340,13 @@ export default function CustomerFollowupPage() {
                   >
                     <td className="px-3 py-2 font-semibold text-dark">{row.customerName}</td>
                     <td className="px-3 py-2">{row.companyName}</td>
+                    <td className="px-3 py-2 text-xs text-slate-700">{statusCell(row)}</td>
                     <td className="px-3 py-2 capitalize">{row.followUpType || '-'}</td>
                     <td className="px-3 py-2">{row.nextFollowUpDate ? new Date(row.nextFollowUpDate).toLocaleString() : '-'}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{row.notesPreview || '-'}</td>
-                    <td className="px-3 py-2">{row.createdBy?.name || row.createdBy?.email || '-'}</td>
-                    <td className="px-3 py-2">{row.assignedTo?.name || row.assignedTo?.email || '-'}</td>
+                    <td className="px-3 py-2">{personCell(row.createdBy)}</td>
+                    <td className="px-3 py-2">{personCell(row.assignedTo)}</td>
                     <td className="px-3 py-2">{row.createdAt ? new Date(row.createdAt).toLocaleString() : '-'}</td>
-                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs"
-                        onClick={() => navigate(`/dashboard/track/customers/${row.customerId}`)}
-                      >
-                        Open customer
-                      </button>
-                    </td>
                   </tr>
                 ))
               ) : (
@@ -250,12 +371,13 @@ export default function CustomerFollowupPage() {
           <p className="text-sm text-slate-700">
             Customer: {selected.customerName} · {selected.companyName}
           </p>
+          <p className="text-sm text-slate-700">Status: {statusCell(selected)}</p>
           <p className="text-sm text-slate-700">Type: {selected.followUpType || '-'}</p>
           <p className="text-sm text-slate-700">
             Next: {selected.nextFollowUpDate ? new Date(selected.nextFollowUpDate).toLocaleString() : '-'}
           </p>
-          <p className="text-sm text-slate-700">Created by: {selected.createdBy?.name || selected.createdBy?.email || '-'}</p>
-          <p className="text-sm text-slate-700">Assigned to: {selected.assignedTo?.name || selected.assignedTo?.email || '-'}</p>
+          <p className="text-sm text-slate-700">Created by: {personCell(selected.createdBy)}</p>
+          <p className="text-sm text-slate-700">Assigned to: {personCell(selected.assignedTo)}</p>
           <p className="text-sm text-slate-700">Notes: {selected.notes || '-'}</p>
           <div className="pt-2">
             <button

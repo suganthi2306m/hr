@@ -1,3 +1,5 @@
+import 'package:track/utils/date_display_util.dart';
+
 class LeadFollowUp {
   final String id;
   final String note;
@@ -20,9 +22,9 @@ class LeadFollowUp {
       id: (json['_id'] ?? '').toString(),
       note: (json['note'] ?? '').toString(),
       actionType: (json['actionType'] ?? 'call').toString(),
-      nextFollowUpAt: json['nextFollowUpAt'] != null ? DateTime.tryParse(json['nextFollowUpAt'].toString()) : null,
+      nextFollowUpAt: DateDisplayUtil.parseFromApiAsLocal(json['nextFollowUpAt']),
       statusAfter: json['statusAfter']?.toString(),
-      createdAt: json['createdAt'] != null ? DateTime.tryParse(json['createdAt'].toString()) : null,
+      createdAt: DateDisplayUtil.parseFromApiAsLocal(json['createdAt']),
     );
   }
 }
@@ -117,13 +119,33 @@ class FollowUpFeedItem {
       companyName: (json['companyName'] ?? '').toString(),
       status: (json['status'] ?? '').toString(),
       followUpType: (json['followUpType'] ?? '').toString(),
-      nextFollowUpDate: json['nextFollowUpDate'] != null ? DateTime.tryParse(json['nextFollowUpDate'].toString()) : null,
+      nextFollowUpDate: DateDisplayUtil.parseFromApiAsLocal(json['nextFollowUpDate']),
       notes: (json['notes'] ?? '').toString(),
       notesPreview: (json['notesPreview'] ?? '').toString(),
       createdByName: (createdBy['name'] ?? createdBy['email'] ?? '').toString(),
-      createdAt: json['createdAt'] != null ? DateTime.tryParse(json['createdAt'].toString()) : null,
-      updatedAt: json['updatedAt'] != null ? DateTime.tryParse(json['updatedAt'].toString()) : null,
+      createdAt: DateDisplayUtil.parseFromApiAsLocal(json['createdAt']),
+      updatedAt: DateDisplayUtil.parseFromApiAsLocal(json['updatedAt']),
       statusAfter: json['statusAfter']?.toString(),
+    );
+  }
+
+  /// Build a feed row from embedded [LeadFollowUp] when history API is unavailable.
+  factory FollowUpFeedItem.fromLeadDetail(LeadFollowUp f, LeadItem lead) {
+    final note = f.note;
+    return FollowUpFeedItem(
+      followUpId: f.id,
+      leadId: lead.id,
+      leadName: lead.leadName,
+      companyName: lead.companyName,
+      status: lead.status,
+      followUpType: f.actionType,
+      nextFollowUpDate: f.nextFollowUpAt,
+      notes: note,
+      notesPreview: note.length > 120 ? '${note.substring(0, 120)}…' : note,
+      createdByName: '',
+      createdAt: f.createdAt,
+      updatedAt: null,
+      statusAfter: f.statusAfter,
     );
   }
 }

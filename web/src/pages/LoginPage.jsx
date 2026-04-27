@@ -269,6 +269,7 @@ function LoginPage() {
     }
   };
 
+  /** While payment is pending, poll status every few seconds. Stops when paid/failed or after repeated errors (avoids endless red requests in DevTools when refresh 401s). */
   useEffect(() => {
     const paymentId = String(signupPayment?.paymentId || '').trim();
     const payerEmail = String(signupForm.email || '').trim().toLowerCase();
@@ -277,6 +278,13 @@ function LoginPage() {
 
     let alive = true;
     let inFlight = false;
+    let failStreak = 0;
+    const MAX_REFRESH_FAILS = 5;
+    const FIRST_POLL_MS = 2000;
+    const POLL_INTERVAL_MS = 6000;
+
+    let immediate;
+    let intervalId;
 
     const tick = async () => {
       if (!alive || inFlight) return;
@@ -285,6 +293,7 @@ function LoginPage() {
         const data = await postPublicAuth(`/auth/register/payments/${encodeURIComponent(paymentId)}/refresh`, {
           email: payerEmail,
         });
+        failStreak = 0;
         const status = String(data?.item?.status || '').toLowerCase();
         if (!alive) return;
         if (status === 'captured' || status === 'paid') {
@@ -305,23 +314,31 @@ function LoginPage() {
           setSignupPaymentState('pending');
         }
       } catch {
-        // keep silent; manual refresh button remains available
+        failStreak += 1;
+        if (failStreak >= MAX_REFRESH_FAILS && alive) {
+          alive = false;
+          if (immediate) clearTimeout(immediate);
+          if (intervalId) clearInterval(intervalId);
+          setSignupError(
+            'Automatic payment checks paused after several errors (often Paysharp status API). Use “I’ve paid - Check status” or fix credentials; fewer requests than before.',
+          );
+        }
       } finally {
         inFlight = false;
       }
     };
 
-    const immediate = setTimeout(() => {
+    immediate = setTimeout(() => {
       void tick();
-    }, 1500);
-    const id = setInterval(() => {
+    }, FIRST_POLL_MS);
+    intervalId = setInterval(() => {
       void tick();
-    }, 3000);
+    }, POLL_INTERVAL_MS);
 
     return () => {
       alive = false;
       clearTimeout(immediate);
-      clearInterval(id);
+      clearInterval(intervalId);
     };
   }, [signupPayment?.paymentId, signupForm.email, signupPaymentState]);
 

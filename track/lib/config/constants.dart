@@ -101,6 +101,24 @@ class AppConstants {
   static const int absentAlertAfterHour = 10;
   static const int absentAlertAfterMinute = 11;
 
+  /// Daily location-tracking upload window (local device/server time).
+  /// Start inclusive at 09:00 and stop at 19:30.
+  static const int locationTrackingStartHour = 9;
+  static const int locationTrackingStartMinute = 0;
+  static const int locationTrackingEndHour = 19;
+  static const int locationTrackingEndMinute = 30;
+
+  /// Returns true only when [now] falls within configured tracking window.
+  static bool isWithinLocationTrackingWindow([DateTime? now]) {
+    final current = now ?? DateTime.now();
+    final startMinutes =
+        (locationTrackingStartHour * 60) + locationTrackingStartMinute;
+    final endMinutes =
+        (locationTrackingEndHour * 60) + locationTrackingEndMinute;
+    final currentMinutes = (current.hour * 60) + current.minute;
+    return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+  }
+
   /// Resolve LMS file path to full URL (handles relative paths and full URLs).
   static String getLmsFileUrl(String? path) {
     if (path == null || path.isEmpty) return '';

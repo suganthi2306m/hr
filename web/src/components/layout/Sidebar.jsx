@@ -10,15 +10,16 @@ const mainLinks = [
 ];
 
 const CUSTOMER_BASE = '/dashboard/track/customers';
+const TASKS_BASE = '/dashboard/track/fieldtasks';
 const customerSubLinks = [
   { to: `${CUSTOMER_BASE}`, label: 'Directory', end: true },
-  { to: `${CUSTOMER_BASE}/follow-up`, label: 'Follow-up' },
+  { to: TASKS_BASE, label: 'Tasks' },
 ];
 
 const trackLinks = [
   { to: CUSTOMER_BASE, label: 'Customers', icon: 'customers' },
   { to: '/dashboard/track/visits', label: 'Visits', icon: 'visits' },
-  { to: '/dashboard/track/leads', label: 'Leads', icon: 'tasks' },
+  { to: '/dashboard/track/leads', label: 'Leads', icon: 'leads' },
   { to: '/dashboard/track/livetrack', label: 'LiveTrack', icon: 'location', brand: true },
 ];
 
@@ -107,6 +108,13 @@ function NavIcon({ name }) {
           <path d="M4 7h16v10H4z" />
           <path d="M8 7V5h8v2" />
           <path d="M4 12h16" />
+        </svg>
+      );
+    case 'leads':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true">
+          <path d="M12 3v18" strokeLinecap="round" />
+          <path d="M17 8H9.5a3.5 3.5 0 0 0 0 7H14a3 3 0 0 1 0 6H6" strokeLinecap="round" />
         </svg>
       );
     case 'tasks':
@@ -205,7 +213,9 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
   const visitsPrefix = '/dashboard/track/visits';
   const [attendanceOpen, setAttendanceOpen] = useState(() => location.pathname.startsWith(ATT_BASE));
   const [leadsOpen, setLeadsOpen] = useState(() => location.pathname.startsWith(LEAD_BASE));
-  const [customersOpen, setCustomersOpen] = useState(() => location.pathname.startsWith(CUSTOMER_BASE));
+  const [customersOpen, setCustomersOpen] = useState(
+    () => location.pathname.startsWith(CUSTOMER_BASE) || location.pathname.startsWith(TASKS_BASE),
+  );
 
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- open accordion when route is nested */
@@ -219,7 +229,7 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
   }, [location.pathname]);
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
-    if (location.pathname.startsWith(CUSTOMER_BASE)) setCustomersOpen(true);
+    if (location.pathname.startsWith(CUSTOMER_BASE) || location.pathname.startsWith(TASKS_BASE)) setCustomersOpen(true);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [location.pathname]);
 
@@ -311,7 +321,7 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
                     onClick={() => setCustomersOpen((o) => !o)}
                     className={clsx(
                       'group relative flex w-full items-center justify-between rounded-full px-3 py-2.5 text-left text-sm font-semibold transition-colors',
-                      location.pathname.startsWith(CUSTOMER_BASE)
+                      location.pathname.startsWith(CUSTOMER_BASE) || location.pathname.startsWith(TASKS_BASE)
                         ? 'bg-white/10 text-white'
                         : 'text-slate-400 hover:bg-white/5 hover:text-white',
                     )}
@@ -329,7 +339,7 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
                         <NavLink
                           key={sub.to}
                           to={sub.to}
-                          end={Boolean(sub.end)}
+                          end={sub.end === true}
                           onClick={onCloseMobile}
                           title={sub.label}
                           className={({ isActive }) =>
@@ -399,7 +409,7 @@ function Sidebar({ onLogout, isCollapsed, onToggleCollapse, isMobileOpen, onClos
                       (item.to === visitsPrefix && location.pathname.startsWith(`${visitsPrefix}/`)) ||
                       (item.to === CUSTOMER_BASE &&
                         iconOnlyNav &&
-                        location.pathname.startsWith(CUSTOMER_BASE)) ||
+                        (location.pathname.startsWith(CUSTOMER_BASE) || location.pathname.startsWith(TASKS_BASE))) ||
                       (item.to === LEAD_BASE && iconOnlyNav && location.pathname.startsWith(LEAD_BASE)),
                   })
                 }

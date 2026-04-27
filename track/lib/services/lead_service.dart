@@ -30,6 +30,14 @@ class LeadService {
     return LeadItem.fromJson(item);
   }
 
+  /// All follow-ups on this lead visible to the logged-in user (embedded + web), newest first.
+  Future<List<FollowUpFeedItem>> listLeadFollowUpHistory(String leadId) async {
+    await _setToken();
+    final res = await _api.dio.get<Map<String, dynamic>>('/leads/$leadId/followups/history');
+    final items = (res.data?['items'] is List) ? (res.data!['items'] as List) : const [];
+    return items.whereType<Map<String, dynamic>>().map(FollowUpFeedItem.fromJson).toList();
+  }
+
   Future<void> createLead({
     required String leadName,
     required String companyName,
@@ -89,14 +97,14 @@ class LeadService {
   Future<void> updateFollowUp({
     required String leadId,
     required String followUpId,
-    String? note,
-    String? actionType,
+    required String note,
+    required String actionType,
     DateTime? nextFollowUpAt,
     String? statusAfter,
   }) async {
     await _setToken();
     await _api.dio.put('/leads/$leadId/followups/$followUpId', data: {
-      'note': note,
+      'note': note.trim(),
       'actionType': actionType,
       'nextFollowUpAt': nextFollowUpAt?.toIso8601String(),
       'statusAfter': statusAfter,

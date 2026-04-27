@@ -551,12 +551,38 @@ class AuthService {
       }
       _api.setAuthToken(token);
       await _api.dio.put<Map<String, dynamic>>('/auth/profile', data: data);
+      await _mergeProfilePatchIntoStoredUser(prefs, data);
       return {'success': true};
     } on DioException catch (e) {
       return _handleDioError(e, 'Failed to update profile', null);
     } catch (e) {
       return {'success': false, 'message': _handleException(e)};
     }
+  }
+
+  /// Keeps [SharedPreferences] `user` in sync after profile PUT so the rest of
+  /// the app sees updated fields without waiting for another login.
+  Future<void> _mergeProfilePatchIntoStoredUser(
+    SharedPreferences prefs,
+    Map<String, dynamic> patch,
+  ) async {
+    if (patch.isEmpty) return;
+    final raw = prefs.getString('user');
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final user = Map<String, dynamic>.from(decoded);
+      patch.forEach((key, value) {
+        user[key] = value;
+      });
+      if (patch.containsKey('phone')) {
+        final p = patch['phone'];
+        user['mobile'] = p;
+        user['phoneNumber'] = p;
+      }
+      await prefs.setString('user', jsonEncode(_normalizeUserSessionMap(user)));
+    } catch (_) {}
   }
 
   /// Update education details. [education] is a list of maps with keys:

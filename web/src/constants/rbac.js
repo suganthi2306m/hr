@@ -43,6 +43,8 @@ export const TASK_LIFECYCLE_STATUSES = [
   'in_progress',
   'completed',
   'verified',
+  'cancelled',
+  'reassigned',
   'progress',
   'arrived',
   'rejected',

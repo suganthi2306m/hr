@@ -6,11 +6,19 @@ const TaskDetails = require('../../src/models/TaskDetails');
 const Customer = require('../../src/models/Customer');
 let Branch = null;
 let Attendance = null;
+let Company = null;
+let LeaveRequest = null;
 try {
   Branch = require('../../src/models/Branch');
 } catch (_) {}
 try {
   Attendance = require('../../src/models/Attendance');
+} catch (_) {}
+try {
+  Company = require('../../src/models/Company');
+} catch (_) {}
+try {
+  LeaveRequest = require('../../src/models/LeaveRequest');
 } catch (_) {}
 const {
   upsertTaskDetails,
@@ -82,6 +90,124 @@ function endOfLocalDay(d = new Date()) {
   const x = new Date(d);
   x.setHours(23, 59, 59, 999);
   return x;
+}
+
+const TRACKING_WINDOW_START_MINUTES = 9 * 60; // 09:00
+const TRACKING_WINDOW_END_MINUTES = (19 * 60) + 30; // 19:30
+const WEEKLY_OFF_DAY_KEYS = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+];
+
+function isWithinLocationTrackingWindow(now = new Date()) {
+  const minutes = (now.getHours() * 60) + now.getMinutes();
+  return (
+    minutes >= TRACKING_WINDOW_START_MINUTES &&
+    minutes <= TRACKING_WINDOW_END_MINUTES
+  );
+}
+
+function emptyWeeklyOffRule() {
+  return {
+    all: false,
+    first: false,
+    second: false,
+    third: false,
+    fourth: false,
+    fifth: false,
+  };
+}
+
+function normalizeWeeklyOffPolicy(raw) {
+  const out = {
+    days: {
+      sunday: emptyWeeklyOffRule(),
+      monday: emptyWeeklyOffRule(),
+      tuesday: emptyWeeklyOffRule(),
+      wednesday: emptyWeeklyOffRule(),
+      thursday: emptyWeeklyOffRule(),
+      friday: emptyWeeklyOffRule(),
+      saturday: emptyWeeklyOffRule(),
+    },
+  };
+  if (!raw || typeof raw !== 'object') return out;
+  const srcDays = raw.days && typeof raw.days === 'object' ? raw.days : {};
+  WEEKLY_OFF_DAY_KEYS.forEach((k) => {
+    const d = srcDays[k] && typeof srcDays[k] === 'object' ? srcDays[k] : {};
+    out.days[k] = {
+      all: Boolean(d.all),
+      first: Boolean(d.first),
+      second: Boolean(d.second),
+      third: Boolean(d.third),
+      fourth: Boolean(d.fourth),
+      fifth: Boolean(d.fifth),
+    };
+  });
+  return out;
+}
+
+function occurrenceOfWeekdayInMonth(date) {
+  const d = new Date(date);
+  const dayOfMonth = d.getDate();
+  return Math.floor((dayOfMonth - 1) / 7) + 1; // 1..5
+}
+
+function isWeekOffByPolicy(policy, now = new Date()) {
+  if (!policy || typeof policy !== 'object') return false;
+  const normalized = normalizeWeeklyOffPolicy(policy);
+  const key = WEEKLY_OFF_DAY_KEYS[now.getDay()];
+  const rule = normalized.days[key];
+  if (!rule) return false;
+  if (rule.all) return true;
+  const occ = occurrenceOfWeekdayInMonth(now);
+  if (occ === 1 && rule.first) return true;
+  if (occ === 2 && rule.second) return true;
+  if (occ === 3 && rule.third) return true;
+  if (occ === 4 && rule.fourth) return true;
+  if (occ === 5 && rule.fifth) return true;
+  return false;
+}
+
+function isWeekOffByLegacyWeeklyHolidays(weeklyHolidays, now = new Date()) {
+  if (!Array.isArray(weeklyHolidays) || weeklyHolidays.length === 0) return false;
+  const todayDow = now.getDay(); // 0..6 (Sun..Sat)
+  return weeklyHolidays.some((entry) => Number(entry?.day) === todayDow);
+}
+
+async function checkLeaveOrWeekOffBlock(staffId, companyId) {
+  const now = new Date();
+  if (staffId && LeaveRequest) {
+    const approvedLeave = await LeaveRequest.findOne({
+      userId: staffId,
+      status: 'APPROVED',
+      fromDate: { $lte: endOfLocalDay(now) },
+      toDate: { $gte: startOfLocalDay(now) },
+    })
+      .select('_id')
+      .lean();
+    if (approvedLeave) return 'approved_leave';
+  }
+
+  if (companyId && Company) {
+    const company = await Company.findById(companyId)
+      .select('orgSetup.weeklyOff settings.business.weeklyHolidays')
+      .lean();
+    const weeklyOffPolicy = company?.orgSetup?.weeklyOff ?? null;
+    const legacyWeeklyHolidays = company?.settings?.business?.weeklyHolidays ?? [];
+    if (
+      isWeekOffByPolicy(weeklyOffPolicy, now) ||
+      isWeekOffByLegacyWeeklyHolidays(legacyWeeklyHolidays, now)
+    ) {
+      return 'week_off';
+    }
+  }
+
+  return null;
 }
 
 /** Attendance row has a real punch-in (mobile `checkInTime`, web `checkInAt`, or legacy `punchIn`). */
@@ -460,12 +586,20 @@ async function computePresenceStatusForOffice(lat, lng, branchId, accuracyM = 0)
  * Supports mobile attendance (checkInTime/checkOutTime), web attendance (checkInAt/checkOutAt, dayStatus),
  * and legacy punch schemas.
  */
-async function validateAttendanceForPresence(staffId) {
+async function validateAttendanceForPresence(staffId, companyId = null) {
   if (!Attendance) {
     return { canTrack: true };
   }
   if (!staffId) {
     return { canTrack: false, reason: 'no_staff_id' };
+  }
+
+  const dayBlockReason = await checkLeaveOrWeekOffBlock(staffId, companyId);
+  if (dayBlockReason === 'approved_leave') {
+    return { canTrack: false, reason: 'approved_leave' };
+  }
+  if (dayBlockReason === 'week_off') {
+    return { canTrack: false, reason: 'week_off' };
   }
 
   const uidClause = attendanceUserIdClause(staffId);
@@ -615,6 +749,14 @@ exports.storePresenceTracking = async (req, res) => {
       pincode,
     } = req.body;
     const actor = resolveActor(req);
+    if (!isWithinLocationTrackingWindow()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Presence tracking allowed only between 09:00 and 19:30',
+        reason: 'outside_tracking_window',
+      });
+    }
+
     const staffId = actor.id;
     const staffName = actor.name;
     console.log(
@@ -644,7 +786,10 @@ exports.storePresenceTracking = async (req, res) => {
       return res.status(400).json({ success: false, message: 'lat, lng must be valid numbers' });
     }
 
-    const validation = await validateAttendanceForPresence(staffId);
+    const validation = await validateAttendanceForPresence(
+      staffId,
+      actor.companyId,
+    );
     if (!validation.canTrack) {
       console.log(
         '[PresenceTracking] blocked by attendance validation:',
@@ -812,7 +957,11 @@ exports.getPresenceTrackingStatus = async (req, res) => {
     const staffId = resolveActor(req).id;
     if (!staffId) return res.status(401).json({ success: false, message: 'Unauthorized' });
 
-    const validation = await validateAttendanceForPresence(staffId);
+    const actor = resolveActor(req);
+    const validation = await validateAttendanceForPresence(
+      staffId,
+      actor.companyId,
+    );
     const baseQuery = User.findById(staffId).select('branchId');
     const staff = Branch
       ? await baseQuery.populate('branchId', 'branchName latitude longitude radius geofence').lean()
@@ -899,6 +1048,33 @@ exports.storeTracking = async (req, res) => {
         batteryPercent: req.body?.batteryPercent,
       });
     }
+    const actor = resolveActor(req);
+    const dayBlockReason = await checkLeaveOrWeekOffBlock(
+      actor.id,
+      actor.companyId,
+    );
+    if (dayBlockReason === 'approved_leave') {
+      return res.status(403).json({
+        success: false,
+        message: 'Task tracking blocked: approved leave for today',
+        reason: 'approved_leave',
+      });
+    }
+    if (dayBlockReason === 'week_off') {
+      return res.status(403).json({
+        success: false,
+        message: 'Task tracking blocked: today is week off',
+        reason: 'week_off',
+      });
+    }
+    if (!isWithinLocationTrackingWindow()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Task tracking allowed only between 09:00 and 19:30',
+        reason: 'outside_tracking_window',
+      });
+    }
+
     const {
       taskId,
       lat,
@@ -914,7 +1090,6 @@ exports.storeTracking = async (req, res) => {
       area,
       pincode,
     } = req.body;
-    const actor = resolveActor(req);
     const staffId = actor.id;
     const staffName = actor.name;
     if (!taskId || lat == null || lng == null) {

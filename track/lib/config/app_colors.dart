@@ -7,6 +7,9 @@ class AppColors {
   static Color primaryDark = const Color(0xFFD3B63C);
   static Color primaryLight = const Color(0xFFF6E08E);
 
+  /// Dark gold for text/icons on white — primary yellow is too light for body text.
+  static Color primaryOnLightText = const Color(0xFF5A4800);
+
   static const Color accent = Color(0xFFFFA000);
   static Color secondary = const Color(0xFFF2D04A);
   static Color text = const Color(0xFF263238);
@@ -28,6 +31,7 @@ class AppColors {
     primaryDark = _getDarkerColor(color);
     primaryLight = color.withValues(alpha: 0.5);
     secondary = color;
+    primaryOnLightText = _readablePrimaryOnLight(color);
   }
 
   /// Called by ThemeProvider when theme mode changes.
@@ -43,6 +47,14 @@ class AppColors {
   static Color _getDarkerColor(Color color) {
     final hsl = HSLColor.fromColor(color);
     return hsl.withLightness((hsl.lightness - 0.1).clamp(0.0, 1.0)).toColor();
+  }
+
+  static Color _readablePrimaryOnLight(Color color) {
+    final hsl = HSLColor.fromColor(color);
+    return hsl
+        .withLightness(hsl.lightness.clamp(0.0, 1.0) * 0.38)
+        .withSaturation((hsl.saturation * 0.92).clamp(0.45, 1.0))
+        .toColor();
   }
 }
 

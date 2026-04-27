@@ -13,10 +13,9 @@ import 'package:track/screens/dashboard/dashboard_screen.dart';
 import 'package:track/screens/geo/add_task_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
 import 'package:track/screens/geo/arrived_screen.dart';
-import 'package:track/screens/geo/completed_task_detail_screen.dart';
 import 'package:track/screens/profile/profile_screen.dart';
 import 'package:track/screens/settings/settings_screen.dart';
-import 'package:track/screens/geo/task_detail_screen.dart';
+import 'package:track/screens/geo/simple_task_info_screen.dart';
 import 'package:track/screens/visits/visits_screen.dart';
 import 'package:intl/intl.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
@@ -809,7 +808,7 @@ class _MyTasksScreenState extends State<MyTasksScreen>
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => CompletedTaskDetailScreen(task: task),
+          builder: (context) => SimpleTaskInfoScreen(task: task),
         ),
       );
       return;
@@ -847,7 +846,7 @@ class _MyTasksScreenState extends State<MyTasksScreen>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => TaskDetailScreen(task: task),
+        builder: (context) => SimpleTaskInfoScreen(task: task),
       ),
     );
   }

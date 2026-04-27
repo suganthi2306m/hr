@@ -19,9 +19,9 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
   final LeadService _leadService = LeadService();
   late final TabController _tab;
   LeadItem? _item;
+  List<FollowUpFeedItem> _historyFeed = const [];
   bool _loading = true;
   String _error = '';
-  bool _historyFiltersOpen = false;
   bool _showInlineAddFollowUp = false;
   String _historyTypeFilter = '';
   String _historyStatusAfterFilter = '';
@@ -54,8 +54,20 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
     });
     try {
       final row = await _leadService.getLeadById(widget.leadId);
+      List<FollowUpFeedItem> hist = [];
+      try {
+        hist = await _leadService.listLeadFollowUpHistory(widget.leadId);
+      } catch (_) {
+        hist = [];
+      }
+      if (hist.isEmpty && row.followUps.isNotEmpty) {
+        hist = row.followUps.map((f) => FollowUpFeedItem.fromLeadDetail(f, row)).toList();
+      }
       if (!mounted) return;
-      setState(() => _item = row);
+      setState(() {
+        _item = row;
+        _historyFeed = hist;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -175,19 +187,19 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
     return '${two(l.day)}/${two(l.month)}/${l.year} ${two(l.hour)}:${two(l.minute)}';
   }
 
-  List<LeadFollowUp> _visibleFollowUpHistory(LeadItem row) {
-    return row.followUps.where((f) {
-      if (_historyTypeFilter.isNotEmpty && f.actionType.toLowerCase() != _historyTypeFilter) {
+  List<FollowUpFeedItem> _visibleHistoryFeed() {
+    return _historyFeed.where((e) {
+      if (_historyTypeFilter.isNotEmpty && e.followUpType.toLowerCase() != _historyTypeFilter) {
         return false;
       }
       if (_historyStatusAfterFilter.isNotEmpty &&
-          (f.statusAfter ?? '').toLowerCase() != _historyStatusAfterFilter) {
+          (e.statusAfter ?? '').toLowerCase() != _historyStatusAfterFilter) {
         return false;
       }
-      if (_historyFrom != null && f.createdAt != null) {
-        if (f.createdAt!.isBefore(_historyFrom!)) return false;
+      if (_historyFrom != null && e.createdAt != null) {
+        if (e.createdAt!.isBefore(_historyFrom!)) return false;
       }
-      if (_historyTo != null && f.createdAt != null) {
+      if (_historyTo != null && e.createdAt != null) {
         final toEnd = DateTime(
           _historyTo!.year,
           _historyTo!.month,
@@ -196,7 +208,7 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
           59,
           59,
         );
-        if (f.createdAt!.isAfter(toEnd)) return false;
+        if (e.createdAt!.isAfter(toEnd)) return false;
       }
       return true;
     }).toList()
@@ -204,23 +216,43 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
           .compareTo(a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0)));
   }
 
-  Future<void> _pickHistoryDate({required bool from}) async {
-    final now = DateTime.now();
-    final initial = from ? (_historyFrom ?? now) : (_historyTo ?? _historyFrom ?? now);
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(now.year - 3),
-      lastDate: DateTime(now.year + 3),
-    );
-    if (picked == null || !mounted) return;
+  bool get _historyFiltersActive =>
+      _historyTypeFilter.isNotEmpty ||
+      _historyStatusAfterFilter.isNotEmpty ||
+      _historyFrom != null ||
+      _historyTo != null;
+
+  Future<void> _refreshHistoryClearFilters() async {
     setState(() {
-      if (from) {
-        _historyFrom = picked;
-      } else {
-        _historyTo = picked;
-      }
+      _historyTypeFilter = '';
+      _historyStatusAfterFilter = '';
+      _historyFrom = null;
+      _historyTo = null;
     });
+    await _load();
+  }
+
+  void _openHistoryFilterForm() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _LeadHistoryFilterSheet(
+        initialType: _historyTypeFilter,
+        initialStatus: _historyStatusAfterFilter,
+        initialFrom: _historyFrom,
+        initialTo: _historyTo,
+        onApply: (type, status, from, to) {
+          if (!mounted) return;
+          setState(() {
+            _historyTypeFilter = type;
+            _historyStatusAfterFilter = status;
+            _historyFrom = from;
+            _historyTo = to;
+          });
+        },
+      ),
+    );
   }
 
   Future<void> _showAddFollowUpSheet() async {
@@ -519,7 +551,11 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
                                 const Expanded(
                                   child: Text(
                                     'Follow-up history',
-                                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 16,
+                                      color: Colors.black,
+                                    ),
                                   ),
                                 ),
                                 IconButton(
@@ -528,102 +564,31 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
                                   tooltip: 'Add follow-up',
                                 ),
                                 IconButton(
-                                  onPressed: () => setState(
-                                    () => _historyFiltersOpen = !_historyFiltersOpen,
-                                  ),
+                                  onPressed: _refreshHistoryClearFilters,
                                   icon: Icon(
-                                    _historyFiltersOpen ? Icons.filter_alt : Icons.filter_alt_outlined,
+                                    Icons.refresh_rounded,
+                                    color: Colors.black.withValues(alpha: 0.82),
+                                  ),
+                                  tooltip: 'Refresh & clear filters',
+                                ),
+                                IconButton(
+                                  onPressed: _openHistoryFilterForm,
+                                  icon: Icon(
+                                    _historyFiltersActive ? Icons.filter_alt : Icons.filter_alt_outlined,
+                                    color: _historyFiltersActive
+                                        ? Colors.black
+                                        : Colors.black.withValues(alpha: 0.82),
                                   ),
                                   tooltip: 'Filter history',
                                 ),
                               ],
                             ),
-                            if (_historyFiltersOpen) ...[
-                              const SizedBox(height: 8),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
-                                ),
-                                child: Column(
-                                  children: [
-                                    DropdownButtonFormField<String>(
-                                      initialValue: _historyTypeFilter.isEmpty ? null : _historyTypeFilter,
-                                      decoration: _formFieldDecoration(hint: 'Filter by type', icon: Icons.call_outlined),
-                                      items: const [
-                                        DropdownMenuItem(value: '', child: Text('All types')),
-                                        DropdownMenuItem(value: 'call', child: Text('Call')),
-                                        DropdownMenuItem(value: 'visit', child: Text('Visit')),
-                                        DropdownMenuItem(value: 'message', child: Text('Message')),
-                                        DropdownMenuItem(value: 'other', child: Text('Other')),
-                                      ],
-                                      onChanged: (v) => setState(() => _historyTypeFilter = v ?? ''),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    DropdownButtonFormField<String>(
-                                      initialValue: _historyStatusAfterFilter.isEmpty ? null : _historyStatusAfterFilter,
-                                      decoration: _formFieldDecoration(hint: 'Filter by status changed to', icon: Icons.flag_outlined),
-                                      items: const [
-                                        DropdownMenuItem(value: '', child: Text('All statuses')),
-                                        DropdownMenuItem(value: 'new', child: Text('New')),
-                                        DropdownMenuItem(value: 'in_progress', child: Text('In Progress')),
-                                        DropdownMenuItem(value: 'follow_up', child: Text('Follow-up')),
-                                        DropdownMenuItem(value: 'won', child: Text('Won')),
-                                        DropdownMenuItem(value: 'dropped', child: Text('Dropped')),
-                                      ],
-                                      onChanged: (v) => setState(() => _historyStatusAfterFilter = v ?? ''),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: OutlinedButton(
-                                            onPressed: () => _pickHistoryDate(from: true),
-                                            child: Text(
-                                              _historyFrom == null
-                                                  ? 'From date'
-                                                  : _historyFrom!.toLocal().toString().split(' ').first,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: OutlinedButton(
-                                            onPressed: () => _pickHistoryDate(from: false),
-                                            child: Text(
-                                              _historyTo == null
-                                                  ? 'To date'
-                                                  : _historyTo!.toLocal().toString().split(' ').first,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: TextButton.icon(
-                                        onPressed: () => setState(() {
-                                          _historyTypeFilter = '';
-                                          _historyStatusAfterFilter = '';
-                                          _historyFrom = null;
-                                          _historyTo = null;
-                                        }),
-                                        icon: const Icon(Icons.clear_rounded),
-                                        label: const Text('Clear filters'),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
                             const SizedBox(height: 8),
-                            if (_visibleFollowUpHistory(row).isEmpty)
+                            if (_visibleHistoryFeed().isEmpty)
                               const Text('No follow-ups yet.')
                             else
-                              ..._visibleFollowUpHistory(row).map(
-                                (f) => Card(
+                              ..._visibleHistoryFeed().map(
+                                (e) => Card(
                                   margin: const EdgeInsets.only(bottom: 10),
                                   elevation: 0,
                                   shape: RoundedRectangleBorder(
@@ -638,21 +603,30 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Icon(
-                                        f.actionType == 'visit'
+                                        e.followUpType == 'visit'
                                             ? Icons.storefront_rounded
-                                            : f.actionType == 'message'
+                                            : e.followUpType == 'message'
                                                 ? Icons.chat_bubble_outline_rounded
                                                 : Icons.call_outlined,
                                         size: 18,
                                       ),
                                     ),
                                     title: Text(
-                                      f.note,
-                                      style: const TextStyle(fontWeight: FontWeight.w700),
+                                      e.notes,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.black,
+                                      ),
                                     ),
                                     subtitle: Text(
-                                      '${f.actionType.toUpperCase()} · ${_fmtDateTime(f.createdAt)}'
-                                      '${f.statusAfter != null ? ' · status: ${f.statusAfter}' : ''}',
+                                      [
+                                        if (e.createdByName.trim().isNotEmpty) 'By ${e.createdByName.trim()}',
+                                        e.followUpType.toUpperCase(),
+                                        _fmtDateTime(e.createdAt),
+                                        if (e.nextFollowUpDate != null) 'next: ${_fmtDateTime(e.nextFollowUpDate)}',
+                                        if ((e.statusAfter ?? '').isNotEmpty) 'status: ${e.statusAfter}',
+                                      ].join(' · '),
+                                      style: const TextStyle(color: Colors.black87, fontSize: 13),
                                     ),
                                   ),
                                 ),
@@ -688,6 +662,266 @@ class _LeadDetailScreenState extends State<LeadDetailScreen> with SingleTickerPr
           ),
         ],
       ),
+    );
+  }
+}
+
+typedef _HistoryFilterApply = void Function(
+  String type,
+  String statusAfter,
+  DateTime? from,
+  DateTime? to,
+);
+
+class _LeadHistoryFilterSheet extends StatefulWidget {
+  const _LeadHistoryFilterSheet({
+    required this.initialType,
+    required this.initialStatus,
+    required this.initialFrom,
+    required this.initialTo,
+    required this.onApply,
+  });
+
+  final String initialType;
+  final String initialStatus;
+  final DateTime? initialFrom;
+  final DateTime? initialTo;
+  final _HistoryFilterApply onApply;
+
+  @override
+  State<_LeadHistoryFilterSheet> createState() => _LeadHistoryFilterSheetState();
+}
+
+class _LeadHistoryFilterSheetState extends State<_LeadHistoryFilterSheet> {
+  late String _type;
+  late String _status;
+  DateTime? _from;
+  DateTime? _to;
+
+  static DateTime _dOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  @override
+  void initState() {
+    super.initState();
+    _type = widget.initialType;
+    _status = widget.initialStatus;
+    _from = widget.initialFrom != null ? _dOnly(widget.initialFrom!) : null;
+    _to = widget.initialTo != null ? _dOnly(widget.initialTo!) : null;
+  }
+
+  InputDecoration _filterDec(String hint, [IconData? icon]) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: Colors.black45),
+      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: Colors.black54),
+      filled: true,
+      fillColor: const Color(0xFFF3F4F6),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.black.withValues(alpha: 0.12)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.black.withValues(alpha: 0.12)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Colors.black87, width: 1.2),
+      ),
+    );
+  }
+
+  Future<void> _pickDate({required bool from}) async {
+    final now = DateTime.now();
+    final initial = from ? (_from ?? now) : (_to ?? _from ?? now);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(now.year - 3),
+      lastDate: DateTime(now.year + 3),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      final d = _dOnly(picked);
+      if (from) {
+        _from = d;
+        if (_to != null && _to!.isBefore(_from!)) _to = _from;
+      } else {
+        _to = d;
+        if (_from != null && _to!.isBefore(_from!)) _from = _to;
+      }
+    });
+  }
+
+  void _clearDraft() {
+    setState(() {
+      _type = '';
+      _status = '';
+      _from = null;
+      _to = null;
+    });
+  }
+
+  void _apply() {
+    widget.onApply(_type, _status, _from, _to);
+    Navigator.of(context).pop();
+  }
+
+  String _dateLabel(DateTime? d, String placeholder) {
+    if (d == null) return placeholder;
+    final l = d.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(l.day)}/${two(l.month)}/${l.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPad = MediaQuery.paddingOf(context).bottom + 8;
+    return DraggableScrollableSheet(
+      initialChildSize: 0.55,
+      minChildSize: 0.38,
+      maxChildSize: 0.88,
+      expand: false,
+      builder: (_, scrollController) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+          ),
+          child: ListView(
+            controller: scrollController,
+            padding: EdgeInsets.fromLTRB(16, 10, 16, bottomPad + 12),
+            children: [
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Filter follow-up history',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 16),
+              InputDecorator(
+                decoration: _filterDec('Type', Icons.call_outlined),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: _type.isEmpty ? '' : _type,
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.black54),
+                    style: const TextStyle(color: Colors.black, fontSize: 15),
+                    dropdownColor: Colors.white,
+                    items: const [
+                      DropdownMenuItem(value: '', child: Text('All types', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'call', child: Text('Call', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'visit', child: Text('Visit', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'message', child: Text('Message', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'other', child: Text('Other', style: TextStyle(color: Colors.black))),
+                    ],
+                    onChanged: (v) => setState(() => _type = v ?? ''),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              InputDecorator(
+                decoration: _filterDec('Status changed to', Icons.flag_outlined),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: _status.isEmpty ? '' : _status,
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.black54),
+                    style: const TextStyle(color: Colors.black, fontSize: 15),
+                    dropdownColor: Colors.white,
+                    items: const [
+                      DropdownMenuItem(value: '', child: Text('All statuses', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'new', child: Text('New', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'in_progress', child: Text('In Progress', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'follow_up', child: Text('Follow-up', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'won', child: Text('Won', style: TextStyle(color: Colors.black))),
+                      DropdownMenuItem(value: 'dropped', child: Text('Dropped', style: TextStyle(color: Colors.black))),
+                    ],
+                    onChanged: (v) => setState(() => _status = v ?? ''),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => _pickDate(from: true),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.black,
+                        side: BorderSide(color: Colors.black.withValues(alpha: 0.2)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: Text(
+                        _dateLabel(_from, 'From date'),
+                        style: const TextStyle(color: Colors.black, fontSize: 14),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => _pickDate(from: false),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.black,
+                        side: BorderSide(color: Colors.black.withValues(alpha: 0.2)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: Text(
+                        _dateLabel(_to, 'To date'),
+                        style: const TextStyle(color: Colors.black, fontSize: 14),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _clearDraft,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.black87,
+                        side: BorderSide(color: Colors.black.withValues(alpha: 0.2)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text('Clear', style: TextStyle(color: Colors.black87)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton(
+                      onPressed: _apply,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.w700, color: Colors.black)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

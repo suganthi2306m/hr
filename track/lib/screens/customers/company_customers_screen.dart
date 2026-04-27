@@ -5,20 +5,22 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:track/config/app_colors.dart';
 import 'package:track/models/customer.dart';
-import 'package:track/models/customer_followup_feed.dart';
+import 'package:track/models/task.dart';
 import 'package:track/navigation/main_shell_navigation.dart';
 import 'package:track/screens/auth/login_screen.dart';
 import 'package:track/screens/customers/customer_detail_tabs_screen.dart';
 import 'package:track/screens/geo/add_customer_screen.dart';
 import 'package:track/screens/geo/add_task_screen.dart';
+import 'package:track/screens/geo/simple_task_info_screen.dart';
 import 'package:track/screens/profile/profile_screen.dart';
 import 'package:track/screens/settings/settings_screen.dart';
 import 'package:track/services/auth_service.dart';
 import 'package:track/services/customer_service.dart';
+import 'package:track/services/task_service.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
 import 'package:track/widgets/location_loader.dart';
 
-/// Company customers (all) + your customer follow-ups (`followupCustomer` on API).
+/// Company customers (all) + tasks assigned to you (same API as My Tasks).
 class CompanyCustomersScreen extends StatefulWidget {
   const CompanyCustomersScreen({super.key});
 
@@ -29,57 +31,43 @@ class CompanyCustomersScreen extends StatefulWidget {
 class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
     with MainShellSwipeNavigation {
   final CustomerService _customerService = CustomerService();
+  final TaskService _taskService = TaskService();
   final TextEditingController _searchCtrl = TextEditingController();
-  final ScrollController _followUpDateScrollController = ScrollController();
+  final TextEditingController _taskSearchCtrl = TextEditingController();
+  final ScrollController _taskWeekScrollController = ScrollController();
 
   List<Customer> _customers = const [];
-  List<CustomerFollowUpFeedItem> _followUps = const [];
+  List<Task> _tasks = const [];
   bool _loadingCustomers = true;
-  bool _loadingFollowUps = false;
+  bool _loadingTasks = false;
   String? _error;
   String? _userId;
-  String _companyLine = 'Customers';
 
   int _tabIndex = 0;
   bool _customerSortAsc = true;
-  String _fuStatus = '';
-  String _fuType = '';
-  String _fuCustomerId = '';
-  DateTime? _fromDate;
-  DateTime? _toDate;
-  late DateTime _selectedFollowUpDay;
+  /// Task tab: same status groups as My Tasks (`all`, `approved`, `pending`, …).
+  String _taskStatusFilter = 'all';
+  late DateTime _selectedTaskDay;
 
-  static const int _followUpStripPastDays = 20;
-  static const int _followUpStripDayCount = 41;
-  static const double _followUpDayCellWidth = 52;
-
-  static const List<DropdownMenuItem<String>> _fuStatusItems = [
-    DropdownMenuItem(value: '', child: Text('All')),
-    DropdownMenuItem(value: 'pending', child: Text('Upcoming (next date)')),
-    DropdownMenuItem(value: 'overdue', child: Text('Overdue next date')),
-    DropdownMenuItem(value: 'none', child: Text('No next date')),
-  ];
-
-  static const List<DropdownMenuItem<String>> _fuTypeItems = [
-    DropdownMenuItem(value: '', child: Text('All types')),
-    DropdownMenuItem(value: 'call', child: Text('Call')),
-    DropdownMenuItem(value: 'visit', child: Text('Visit')),
-    DropdownMenuItem(value: 'message', child: Text('Message')),
-    DropdownMenuItem(value: 'other', child: Text('Other')),
-  ];
+  static const int _taskStripPastDays = 20;
+  static const int _taskStripDayCount = 41;
+  static const double _taskDayCellWidth = 52;
 
   @override
   void initState() {
     super.initState();
-    _selectedFollowUpDay = _dateOnly(DateTime.now());
-    _syncFollowUpDateRangeWithSelectedDay();
+    _selectedTaskDay = _dateOnly(DateTime.now());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scheduleScrollTaskStripToDate(_dateOnly(DateTime.now()));
+    });
     _bootstrap();
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
-    _followUpDateScrollController.dispose();
+    _taskSearchCtrl.dispose();
+    _taskWeekScrollController.dispose();
     super.dispose();
   }
 
@@ -88,38 +76,39 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
   static bool _sameCalendarDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
-  DateTime _followUpStripRangeStart() =>
-      _dateOnly(DateTime.now()).subtract(const Duration(days: _followUpStripPastDays));
+  DateTime _taskStripRangeStart() =>
+      _dateOnly(DateTime.now()).subtract(const Duration(days: _taskStripPastDays));
 
-  int? _indexInFollowUpStrip(DateTime day) {
-    final start = _followUpStripRangeStart();
+  int? _indexInTaskStrip(DateTime day) {
+    final start = _taskStripRangeStart();
     final idx = _dateOnly(day).difference(start).inDays;
-    if (idx < 0 || idx >= _followUpStripDayCount) return null;
+    if (idx < 0 || idx >= _taskStripDayCount) return null;
     return idx;
   }
 
-  void _scheduleScrollFollowUpStripToDate(DateTime day) {
+  void _scheduleScrollTaskStripToDate(DateTime day) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _scrollFollowUpStripDateToCenter(day);
+      _scrollTaskStripDateToCenter(day);
     });
   }
 
-  void _scrollFollowUpStripDateToCenter(DateTime day) {
-    if (!_followUpDateScrollController.hasClients) return;
-    final idx = _indexInFollowUpStrip(day);
+  void _scrollTaskStripDateToCenter(DateTime day) {
+    if (!_taskWeekScrollController.hasClients) return;
+    final idx = _indexInTaskStrip(day);
     if (idx == null) return;
-    final viewport = _followUpDateScrollController.position.viewportDimension;
-    final maxExtent = _followUpDateScrollController.position.maxScrollExtent;
-    final cellCenter = idx * _followUpDayCellWidth + _followUpDayCellWidth / 2;
+    final viewport = _taskWeekScrollController.position.viewportDimension;
+    final maxExtent = _taskWeekScrollController.position.maxScrollExtent;
+    final cellCenter = idx * _taskDayCellWidth + _taskDayCellWidth / 2;
     final offset = (cellCenter - viewport / 2).clamp(0.0, maxExtent);
-    _followUpDateScrollController.jumpTo(offset);
+    _taskWeekScrollController.jumpTo(offset);
   }
 
-  void _syncFollowUpDateRangeWithSelectedDay() {
-    final day = _dateOnly(_selectedFollowUpDay);
-    _fromDate = day;
-    _toDate = day.add(const Duration(hours: 23, minutes: 59, seconds: 59));
+  DateTime _assignedDayKey(Task t) {
+    if (t.assignedDate != null) {
+      return _dateOnly(t.assignedDate!);
+    }
+    return _dateOnly(t.expectedCompletionDate);
   }
 
   Future<void> _readUserLine() async {
@@ -131,10 +120,6 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
         final id = map['_id'] ?? map['id'] ?? map['userId'];
         if (id != null) {
           _userId = id is String ? id : id.toString();
-        }
-        final cn = (map['companyName'] ?? map['company']?['name'])?.toString().trim();
-        if (cn != null && cn.isNotEmpty) {
-          _companyLine = cn;
         }
       }
     }
@@ -153,7 +138,7 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
         _customers = list;
         _loadingCustomers = false;
       });
-      if (_tabIndex == 1) await _loadFollowUps();
+      if (_tabIndex == 1) await _loadTasks();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -163,95 +148,76 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
     }
   }
 
-  Future<void> _loadFollowUps() async {
+  Future<void> _loadTasks() async {
+    if (_userId == null || _userId!.isEmpty) {
+      setState(() {
+        _tasks = const [];
+        _loadingTasks = false;
+        _error = 'Not logged in.';
+      });
+      return;
+    }
     setState(() {
-      _loadingFollowUps = true;
+      _loadingTasks = true;
       _error = null;
     });
     try {
-      final list = await _customerService.listCustomerFollowUps(
-        search: _searchCtrl.text.trim(),
-        status: _fuStatus,
-        // Date filtering is applied client-side by effective follow-up date:
-        // nextFollowUpDate (assigned) fallback createdAt.
-        from: null,
-        to: null,
-      );
+      final list = await _taskService.getAssignedTasks(_userId!);
       if (!mounted) return;
       setState(() {
-        _followUps = list;
-        _loadingFollowUps = false;
+        _tasks = list;
+        _loadingTasks = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString();
-        _loadingFollowUps = false;
+        _loadingTasks = false;
       });
     }
   }
 
-  List<CustomerFollowUpFeedItem> get _visibleFollowUps {
-    final query = _searchCtrl.text.trim().toLowerCase();
-    return _followUps.where((f) {
-      final effectiveDate = f.nextFollowUpDate ?? f.createdAt;
-      if (_fromDate != null && effectiveDate != null && effectiveDate.isBefore(_fromDate!)) {
-        return false;
-      }
-      if (_toDate != null && effectiveDate != null) {
-        final toEnd = DateTime(
-          _toDate!.year,
-          _toDate!.month,
-          _toDate!.day,
-          23,
-          59,
-          59,
-        );
-        if (effectiveDate.isAfter(toEnd)) return false;
-      }
-      if (_fuCustomerId.isNotEmpty && f.customerId != _fuCustomerId) return false;
-      if (_fuType.isNotEmpty && f.followUpType.toLowerCase() != _fuType.toLowerCase()) {
-        return false;
-      }
-      if (_fuStatus == 'none' && f.nextFollowUpDate != null) return false;
-      if (query.isNotEmpty) {
-        final match = f.customerName.toLowerCase().contains(query) ||
-            f.companyName.toLowerCase().contains(query) ||
-            f.notes.toLowerCase().contains(query) ||
-            f.notesPreview.toLowerCase().contains(query);
-        if (!match) return false;
-      }
-      return true;
-    }).toList();
+  bool _matchesTaskStatusFilter(TaskStatus status) {
+    switch (_taskStatusFilter) {
+      case 'all':
+        return true;
+      case 'approved':
+        return status == TaskStatus.approved;
+      case 'pending':
+        return status == TaskStatus.pending ||
+            status == TaskStatus.exitedOnArrival ||
+            status == TaskStatus.exited ||
+            status == TaskStatus.hold ||
+            status == TaskStatus.holdOnArrival ||
+            status == TaskStatus.assigned;
+      case 'rejected':
+        return status == TaskStatus.rejected;
+      case 'completed':
+        return status == TaskStatus.completed;
+      default:
+        return true;
+    }
   }
 
-  Future<void> _pickDate({required bool from}) async {
-    final now = DateTime.now();
-    final initial = from ? (_fromDate ?? now) : (_toDate ?? _fromDate ?? now);
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(now.year - 3),
-      lastDate: DateTime(now.year + 3),
-    );
-    if (picked == null || !mounted) return;
-    setState(() {
-      if (from) {
-        _fromDate = picked;
-        if (_toDate != null && _toDate!.isBefore(_fromDate!)) _toDate = _fromDate;
-      } else {
-        _toDate = picked;
-      }
-    });
-    if (_tabIndex == 1) await _loadFollowUps();
-  }
-
-  void _clearDates() {
-    setState(() {
-      _fromDate = null;
-      _toDate = null;
-    });
-    if (_tabIndex == 1) _loadFollowUps();
+  List<Task> get _visibleTasks {
+    var list = _tasks.where((t) => _matchesTaskStatusFilter(t.status)).toList();
+    final q = _taskSearchCtrl.text.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      list = list.where((t) {
+        if (t.taskId.toLowerCase().contains(q)) return true;
+        if (t.taskTitle.toLowerCase().contains(q)) return true;
+        if (t.customer != null && t.customer!.customerName.toLowerCase().contains(q)) {
+          return true;
+        }
+        if (t.customer?.companyName != null &&
+            t.customer!.companyName!.toLowerCase().contains(q)) {
+          return true;
+        }
+        return false;
+      }).toList();
+    }
+    final sel = _dateOnly(_selectedTaskDay);
+    return list.where((t) => _assignedDayKey(t) == sel).toList();
   }
 
   List<Customer> get _visibleCustomers {
@@ -270,28 +236,6 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
     return out;
   }
 
-  String _fmtDateTime(DateTime? dt) {
-    if (dt == null) return '--';
-    final l = dt.toLocal();
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(l.day)}/${two(l.month)}/${l.year} ${two(l.hour)}:${two(l.minute)}';
-  }
-
-  String _fmtDateOnly(DateTime dt) => DateFormat('dd MMM yyyy').format(dt.toLocal());
-
-
-  IconData _followUpTypeIcon(String type) {
-    switch (type.toLowerCase()) {
-      case 'visit':
-        return Icons.storefront_rounded;
-      case 'message':
-        return Icons.chat_bubble_outline_rounded;
-      case 'call':
-      default:
-        return Icons.call_rounded;
-    }
-  }
-
   void _onTopAddPressed() {
     if (_tabIndex == 0) {
       Navigator.push(
@@ -300,7 +244,12 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
       ).then((_) => _bootstrap());
       return;
     }
-    _showAddCustomerFollowUp();
+    if (_userId != null && _userId!.isNotEmpty) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => AddTaskScreen(userId: _userId!)),
+      ).then((_) => _loadTasks());
+    }
   }
 
   Future<void> _openCustomerFilterSheet() async {
@@ -366,12 +315,19 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
   }
 
 
-  Future<void> _openFollowUpFiltersSheet() async {
-    var tempCustomerId = _fuCustomerId;
-    var tempStatus = _fuStatus;
-    var tempType = _fuType;
-    var tempFrom = _fromDate;
-    var tempTo = _toDate;
+  List<DropdownMenuItem<String>> _taskStatusDropdownItems() {
+    return const [
+      DropdownMenuItem<String>(value: 'all', child: Text('All')),
+      DropdownMenuItem<String>(value: 'approved', child: Text('Approved')),
+      DropdownMenuItem<String>(value: 'pending', child: Text('Pending')),
+      DropdownMenuItem<String>(value: 'rejected', child: Text('Rejected')),
+      DropdownMenuItem<String>(value: 'completed', child: Text('Completed')),
+    ];
+  }
+
+  Future<void> _openTaskFiltersSheet() async {
+    var draftStatus = _taskStatusFilter;
+    final draftSearch = TextEditingController(text: _taskSearchCtrl.text);
 
     final applied = await showModalBottomSheet<bool>(
       context: context,
@@ -398,7 +354,7 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                       children: [
                         const Expanded(
                           child: Text(
-                            'Follow-up filters',
+                            'Task filters',
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w800,
@@ -415,200 +371,32 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      value: tempCustomerId.isEmpty ? null : tempCustomerId,
-                      decoration: const InputDecoration(
-                        labelText: 'Customer',
-                        border: OutlineInputBorder(),
-                        labelStyle: TextStyle(color: Colors.black),
-                        hintStyle: TextStyle(color: Colors.black54),
-                      ),
-                      style: const TextStyle(color: Colors.black),
-                      dropdownColor: Colors.white,
-                      iconEnabledColor: Colors.black,
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('All customers')),
-                        ..._customers
-                            .where((c) => (c.id ?? '').isNotEmpty)
-                            .map(
-                              (c) => DropdownMenuItem(
-                                value: c.id,
-                                child: Text(
-                                  '${c.customerName} · ${c.companyName ?? ''}',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                      ],
-                      onChanged: (v) => setSheetState(() => tempCustomerId = v ?? ''),
-                    ),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<String>(
-                      value: tempStatus.isEmpty ? null : tempStatus,
+                      value: draftStatus,
                       decoration: const InputDecoration(
                         labelText: 'Status',
                         border: OutlineInputBorder(),
                         labelStyle: TextStyle(color: Colors.black),
-                        hintStyle: TextStyle(color: Colors.black54),
                       ),
                       style: const TextStyle(color: Colors.black),
                       dropdownColor: Colors.white,
-                      iconEnabledColor: Colors.black,
-                      items: _fuStatusItems,
-                      onChanged: (v) => setSheetState(() => tempStatus = v ?? ''),
-                    ),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<String>(
-                      value: tempType.isEmpty ? null : tempType,
-                      decoration: const InputDecoration(
-                        labelText: 'Type',
-                        border: OutlineInputBorder(),
-                        labelStyle: TextStyle(color: Colors.black),
-                        hintStyle: TextStyle(color: Colors.black54),
-                      ),
-                      style: const TextStyle(color: Colors.black),
-                      dropdownColor: Colors.white,
-                      iconEnabledColor: Colors.black,
-                      items: _fuTypeItems,
-                      onChanged: (v) => setSheetState(() => tempType = v ?? ''),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () async {
-                              final picked = await showDatePicker(
-                                context: ctx,
-                                initialDate: tempFrom ?? DateTime.now(),
-                                firstDate: DateTime.now().subtract(const Duration(days: 365 * 3)),
-                                lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-                              );
-                              if (picked == null) return;
-                              setSheetState(() {
-                                tempFrom = _dateOnly(picked);
-                                if (tempTo != null && tempTo!.isBefore(tempFrom!)) {
-                                  tempTo = tempFrom;
-                                }
-                              });
-                            },
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.black,
-                              side: BorderSide(color: Colors.black.withValues(alpha: 0.2)),
-                            ),
-                            child: Text(
-                              tempFrom == null ? 'From date' : _fmtDateOnly(tempFrom!),
-                              style: const TextStyle(color: Colors.black),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () async {
-                              final picked = await showDatePicker(
-                                context: ctx,
-                                initialDate: tempTo ?? tempFrom ?? DateTime.now(),
-                                firstDate: DateTime.now().subtract(const Duration(days: 365 * 3)),
-                                lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-                              );
-                              if (picked == null) return;
-                              setSheetState(() => tempTo = _dateOnly(picked));
-                            },
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.black,
-                              side: BorderSide(color: Colors.black.withValues(alpha: 0.2)),
-                            ),
-                            child: Text(
-                              tempTo == null ? 'To date' : _fmtDateOnly(tempTo!),
-                              style: const TextStyle(color: Colors.black),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Applied filters',
-                      style: TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        if (tempCustomerId.isNotEmpty)
-                          Chip(
-                            label: Text(
-                              'Customer',
-                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600),
-                            ),
-                            onDeleted: () => setSheetState(() => tempCustomerId = ''),
-                          ),
-                        if (tempStatus.isNotEmpty)
-                          Chip(
-                            label: Text(
-                              'Status',
-                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600),
-                            ),
-                            onDeleted: () => setSheetState(() => tempStatus = ''),
-                          ),
-                        if (tempType.isNotEmpty)
-                          Chip(
-                            label: Text(
-                              'Type',
-                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600),
-                            ),
-                            onDeleted: () => setSheetState(() => tempType = ''),
-                          ),
-                        if (tempFrom != null || tempTo != null)
-                          Chip(
-                            label: Text(
-                              'Date',
-                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w600),
-                            ),
-                            onDeleted: () => setSheetState(() {
-                              tempFrom = null;
-                              tempTo = null;
-                            }),
-                          ),
-                        if (tempCustomerId.isEmpty &&
-                            tempStatus.isEmpty &&
-                            tempType.isEmpty &&
-                            tempFrom == null &&
-                            tempTo == null)
-                          Text(
-                            'No filters selected',
-                            style: TextStyle(color: Colors.black.withValues(alpha: 0.55)),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: () => setSheetState(() {
-                          tempCustomerId = '';
-                          tempStatus = '';
-                          tempType = '';
-                          tempFrom = null;
-                          tempTo = null;
-                        }),
-                        style: TextButton.styleFrom(foregroundColor: Colors.black),
-                        icon: const Icon(Icons.clear_rounded, color: Colors.black),
-                        label: const Text(
-                          'Clear all filters',
-                          style: TextStyle(color: Colors.black),
-                        ),
-                      ),
+                      items: _taskStatusDropdownItems(),
+                      onChanged: (v) => setSheetState(() => draftStatus = v ?? 'all'),
                     ),
                     const SizedBox(height: 12),
+                    TextField(
+                      controller: draftSearch,
+                      decoration: const InputDecoration(
+                        labelText: 'Search',
+                        hintText: 'Task name, code, customer…',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.search_rounded),
+                      ),
+                      onChanged: (_) => setSheetState(() {}),
+                    ),
+                    const SizedBox(height: 16),
                     FilledButton(
                       onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('Apply filters'),
+                      child: const Text('Apply'),
                     ),
                   ],
                 ),
@@ -619,17 +407,18 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
       },
     );
 
-    if (applied != true || !mounted) return;
+    if (applied != true || !mounted) {
+      draftSearch.dispose();
+      return;
+    }
+    final q = draftSearch.text;
+    draftSearch.dispose();
+    if (!mounted) return;
     setState(() {
-      _fuCustomerId = tempCustomerId;
-      _fuStatus = tempStatus;
-      _fuType = tempType;
-      _fromDate = tempFrom;
-      _toDate = tempTo;
+      _taskStatusFilter = draftStatus;
+      _taskSearchCtrl.text = q;
     });
-    await _loadFollowUps();
   }
-
 
   void _openAppMenu(BuildContext context) {
     showAppDrawerMenu(
@@ -690,29 +479,270 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
     );
   }
 
-  Future<void> _showAddCustomerFollowUp() async {
-    if (_customers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No customers to attach a follow-up to.')),
-      );
-      return;
-    }
-    final saved = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+  bool get _hasActiveTaskFilters =>
+      _taskStatusFilter != 'all' || _taskSearchCtrl.text.trim().isNotEmpty;
+
+  void _openTaskDetail(Task task) {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => SimpleTaskInfoScreen(task: task),
       ),
-      builder: (ctx) => _AddCustomerFollowUpBottomSheet(
-        customerService: _customerService,
-        customers: _customers,
-        fmtDateTime: _fmtDateTime,
+    ).then((_) {
+      if (mounted) _loadTasks();
+    });
+  }
+
+  static const List<IconData> _taskCardIcons = [
+    Icons.assignment_rounded,
+    Icons.task_alt_rounded,
+    Icons.checklist_rounded,
+    Icons.local_shipping_outlined,
+    Icons.business_center_outlined,
+    Icons.engineering_outlined,
+    Icons.inventory_2_outlined,
+    Icons.place_outlined,
+  ];
+
+  static const List<Color> _taskCardIconBgTints = [
+    Color(0xFFE3F2FD),
+    Color(0xFFE8F5E9),
+    Color(0xFFFFF3E0),
+    Color(0xFFF3E5F5),
+    Color(0xFFE0F7FA),
+    Color(0xFFFFEBEE),
+    Color(0xFFECEFF1),
+    Color(0xFFE8EAF6),
+  ];
+
+  IconData _taskCardIconFor(Task task) {
+    final key = task.id ?? task.taskId;
+    final i = key.hashCode.abs() % _taskCardIcons.length;
+    return _taskCardIcons[i];
+  }
+
+  Color _taskCardIconBgFor(Task task) {
+    final key = task.id ?? task.taskId;
+    final i = key.hashCode.abs() % _taskCardIconBgTints.length;
+    return _taskCardIconBgTints[i];
+  }
+
+  Color _taskCardIconFgFor(Task task) {
+    final key = task.id ?? task.taskId;
+    final i = key.hashCode.abs() % _taskCardIconBgTints.length;
+    return [
+      Colors.blue.shade700,
+      Colors.green.shade700,
+      Colors.orange.shade800,
+      Colors.purple.shade700,
+      Colors.cyan.shade700,
+      Colors.red.shade700,
+      Colors.blueGrey.shade700,
+      Colors.indigo.shade700,
+    ][i];
+  }
+
+  String _companyNameLine(Task task) {
+    final c = task.customer;
+    if (c == null) return '—';
+    final company = c.companyName?.trim();
+    if (company != null && company.isNotEmpty) return company;
+    final name = c.customerName.trim();
+    if (name.isNotEmpty) return name;
+    return '—';
+  }
+
+  Color _getStatusChipColor(TaskStatus status) {
+    switch (status) {
+      case TaskStatus.pending:
+        return Colors.orange.shade600;
+      case TaskStatus.inProgress:
+        return Colors.blue.shade600;
+      case TaskStatus.arrived:
+        return Colors.indigo.shade600;
+      case TaskStatus.exited:
+        return Colors.amber.shade700;
+      case TaskStatus.exitedOnArrival:
+        return Colors.orange.shade800;
+      case TaskStatus.hold:
+      case TaskStatus.holdOnArrival:
+        return Colors.amber.shade700;
+      case TaskStatus.reopenedOnArrival:
+        return Colors.teal.shade600;
+      case TaskStatus.completed:
+        return Colors.green.shade600;
+      case TaskStatus.waitingForApproval:
+        return Colors.amber.shade600;
+      case TaskStatus.assigned:
+        return Colors.green.shade600;
+      case TaskStatus.scheduled:
+        return Colors.blue.shade600;
+      case TaskStatus.approved:
+      case TaskStatus.staffapproved:
+        return Colors.teal.shade600;
+      case TaskStatus.rejected:
+        return Colors.red.shade600;
+      case TaskStatus.reopened:
+        return Colors.teal.shade600;
+      case TaskStatus.cancelled:
+        return Colors.grey.shade600;
+      case TaskStatus.onlineReady:
+        return Colors.grey.shade600;
+    }
+  }
+
+  Widget _taskCard(Task task) {
+    final statusColor = _getStatusChipColor(task.status);
+    final isCompleted = task.status == TaskStatus.completed;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: Colors.grey.shade300),
+        ),
+        child: InkWell(
+          onTap: () => _openTaskDetail(task),
+          borderRadius: BorderRadius.circular(14),
+          child: Opacity(
+            opacity: isCompleted ? 0.72 : 1,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _taskCardIconBgFor(task),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      _taskCardIconFor(task),
+                      color: _taskCardIconFgFor(task),
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          task.taskTitle,
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${task.taskId} · ${_companyNameLine(task)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          task.status.displayName.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.35,
+                            color: statusColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded, color: Colors.grey.shade500),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
-    if (saved == true && mounted) {
-      await _loadFollowUps();
-    }
+  }
+
+  Widget _taskDayCell(DateTime day, DateTime selected) {
+    final isSelected = _sameCalendarDay(day, selected);
+    final label = DateFormat('EEE').format(day).substring(0, 2).toUpperCase();
+    return InkWell(
+      onTap: () {
+        setState(() => _selectedTaskDay = _dateOnly(day));
+        _scheduleScrollTaskStripToDate(_selectedTaskDay);
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: isSelected ? AppColors.primary : Colors.black45,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: isSelected ? AppColors.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${day.day}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: isSelected ? Colors.black : Colors.black87,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _taskDateStrip() {
+    final start = _taskStripRangeStart();
+    final days = List.generate(
+      _taskStripDayCount,
+      (i) => start.add(Duration(days: i)),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+      child: Material(
+        elevation: 6,
+        shadowColor: Colors.black26,
+        borderRadius: BorderRadius.circular(18),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: SingleChildScrollView(
+            controller: _taskWeekScrollController,
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final day in days)
+                  SizedBox(
+                    width: _taskDayCellWidth,
+                    child: _taskDayCell(day, _selectedTaskDay),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _customerCard(Customer c) {
@@ -780,286 +810,9 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
     );
   }
 
-  Widget _followUpDayCell(DateTime day, DateTime selected) {
-    final isSelected = _sameCalendarDay(day, selected);
-    final label = DateFormat('EEE').format(day).substring(0, 2).toUpperCase();
-    return InkWell(
-      onTap: () async {
-        setState(() {
-          _selectedFollowUpDay = _dateOnly(day);
-          _syncFollowUpDateRangeWithSelectedDay();
-        });
-        _scheduleScrollFollowUpStripToDate(_selectedFollowUpDay);
-        await _loadFollowUps();
-      },
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Column(
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
-                color: isSelected ? AppColors.primary : Colors.black45,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: isSelected ? AppColors.primary : Colors.transparent,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                '${day.day}',
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: isSelected ? Colors.black : Colors.black87,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _followUpDateStrip() {
-    final start = _followUpStripRangeStart();
-    final days = List.generate(
-      _followUpStripDayCount,
-      (i) => start.add(Duration(days: i)),
-    );
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-      child: Material(
-        elevation: 6,
-        shadowColor: Colors.black26,
-        borderRadius: BorderRadius.circular(18),
-        color: Colors.white,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-          child: SingleChildScrollView(
-            controller: _followUpDateScrollController,
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (final day in days)
-                  SizedBox(
-                    width: _followUpDayCellWidth,
-                    child: _followUpDayCell(day, _selectedFollowUpDay),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openFollowUpDetail(CustomerFollowUpFeedItem r) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.55,
-          minChildSize: 0.35,
-          maxChildSize: 0.9,
-          builder: (_, scroll) {
-            return ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              child: Material(
-                color: Colors.white,
-                child: ListView(
-                  controller: scroll,
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.black12,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      r.customerName,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF1A1A1A),
-                      ),
-                    ),
-                    if (r.companyName.isNotEmpty)
-                      Text(
-                        r.companyName,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.black.withValues(alpha: 0.6),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                    _followUpDetailRow(Icons.category_outlined, 'Type', r.followUpType.toUpperCase()),
-                    _followUpDetailRow(Icons.schedule_rounded, 'Next follow-up', _fmtDateTime(r.nextFollowUpDate)),
-                    _followUpDetailRow(Icons.event_note_rounded, 'Created at', _fmtDateTime(r.createdAt)),
-                    _followUpDetailRow(
-                      Icons.person_outline_rounded,
-                      'Created by',
-                      r.createdByName.trim().isEmpty ? '--' : r.createdByName.trim(),
-                    ),
-                    _followUpDetailRow(
-                      Icons.notes_rounded,
-                      'Notes',
-                      r.notes.trim().isEmpty ? '--' : r.notes.trim(),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _followUpDetailRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 22, color: AppColors.primary),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.black.withValues(alpha: 0.6),
-                    letterSpacing: 0.3,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black87,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _followUpCard(CustomerFollowUpFeedItem r) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      elevation: 0,
-      color: Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
-      ),
-      child: InkWell(
-        onTap: () => _openFollowUpDetail(r),
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(_followUpTypeIcon(r.followUpType), color: AppColors.primary, size: 22),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${r.customerName} · ${r.companyName}',
-                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      r.notesPreview.trim().isEmpty ? '--' : r.notesPreview,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.black.withValues(alpha: 0.68),
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: [
-                        _followUpMetaChip(Icons.schedule_rounded, 'Next: ${_fmtDateTime(r.nextFollowUpDate)}'),
-                        _followUpMetaChip(Icons.event_note_rounded, _fmtDateTime(r.createdAt)),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              Icon(Icons.chevron_right_rounded, color: Colors.grey.shade500),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _followUpMetaChip(IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: Colors.black54),
-          const SizedBox(width: 4),
-          Text(
-            text,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final busy = _tabIndex == 0 ? _loadingCustomers : _loadingFollowUps;
+    final busy = _tabIndex == 0 ? _loadingCustomers : _loadingTasks;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -1103,14 +856,14 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                         IconButton(
                           onPressed: _onTopAddPressed,
                           icon: Icon(Icons.add_rounded, color: Colors.black.withValues(alpha: 0.85)),
-                          tooltip: _tabIndex == 0 ? 'Add customer' : 'Add follow-up',
+                          tooltip: _tabIndex == 0 ? 'Add customer' : 'Add task',
                         ),
                         IconButton(
                           onPressed: () async {
                             if (_tabIndex == 0) {
                               await _bootstrap();
                             } else {
-                              await _loadFollowUps();
+                              await _loadTasks();
                             }
                           },
                           icon: Icon(Icons.refresh_rounded, color: Colors.black.withValues(alpha: 0.85)),
@@ -1119,12 +872,17 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                         IconButton(
                           onPressed: () {
                             if (_tabIndex == 1) {
-                              _openFollowUpFiltersSheet();
+                              _openTaskFiltersSheet();
                             } else {
                               _openCustomerFilterSheet();
                             }
                           },
-                          icon: Icon(Icons.filter_alt_outlined, color: Colors.black.withValues(alpha: 0.85)),
+                          icon: Icon(
+                            _tabIndex == 1 && _hasActiveTaskFilters
+                                ? Icons.filter_alt
+                                : Icons.filter_alt_outlined,
+                            color: Colors.black.withValues(alpha: 0.85),
+                          ),
                           tooltip: 'Filter',
                         ),
                       ],
@@ -1160,8 +918,8 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                           borderRadius: BorderRadius.circular(12),
                           onTap: () {
                             setState(() => _tabIndex = 1);
-                            _scheduleScrollFollowUpStripToDate(_selectedFollowUpDay);
-                            _loadFollowUps();
+                            _scheduleScrollTaskStripToDate(_selectedTaskDay);
+                            _loadTasks();
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 10),
@@ -1169,7 +927,7 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                               color: _tabIndex == 1 ? AppColors.primary : Colors.transparent,
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: const Text('Follow-up', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700)),
+                            child: const Text('Tasks', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700)),
                           ),
                         ),
                       ),
@@ -1177,34 +935,39 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                   ),
                 ),
               ),
-              if (_tabIndex == 1) _followUpDateStrip(),
+              if (_tabIndex == 1) _taskDateStrip(),
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
                 child: Row(
                   children: [
                     Expanded(
                       child: TextField(
-                        controller: _searchCtrl,
+                        controller: _tabIndex == 0 ? _searchCtrl : _taskSearchCtrl,
                         decoration: InputDecoration(
-                          hintText: _tabIndex == 0 ? 'Search name / company' : 'Search customer / notes',
+                          hintText: _tabIndex == 0
+                              ? 'Search name / company'
+                              : 'Task name, code, customer…',
                           isDense: true,
                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                           suffixIcon: IconButton(
-                          icon: const Icon(Icons.search_rounded),
-                          onPressed: () {
-                            if (_tabIndex == 0) {
-                              setState(() {});
-                            } else {
-                              _loadFollowUps();
-                            }
-                          },
+                            icon: const Icon(Icons.search_rounded),
+                            onPressed: () {
+                              if (_tabIndex == 0) {
+                                setState(() {});
+                              } else {
+                                setState(() {});
+                              }
+                            },
+                          ),
                         ),
-                        ),
+                        onChanged: (_) {
+                          if (_tabIndex == 1) setState(() {});
+                        },
                         onSubmitted: (_) {
                           if (_tabIndex == 0) {
                             setState(() {});
                           } else {
-                            _loadFollowUps();
+                            setState(() {});
                           }
                         },
                       ),
@@ -1215,7 +978,7 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                         if (_tabIndex == 0) {
                           await _bootstrap();
                         } else {
-                          await _loadFollowUps();
+                          await _loadTasks();
                         }
                       },
                       icon: const Icon(Icons.refresh_rounded),
@@ -1239,7 +1002,7 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                               if (_tabIndex == 0) {
                                 await _bootstrap();
                               } else {
-                                await _loadFollowUps();
+                                await _loadTasks();
                               }
                             },
                             child: _tabIndex == 0
@@ -1263,24 +1026,28 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
                                         itemCount: _visibleCustomers.length,
                                         itemBuilder: (_, i) => _customerCard(_visibleCustomers[i]),
                                       ))
-                                : (_visibleFollowUps.isEmpty
+                                : (_tasks.isEmpty
                                     ? ListView(
                                         physics: const AlwaysScrollableScrollPhysics(),
                                         children: const [
                                           SizedBox(height: 80),
-                                          Center(child: Text('No follow-ups assigned to you.')),
+                                          Center(child: Text('No tasks assigned to you.')),
                                         ],
                                       )
-                                    : ListView.separated(
-                                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                                        physics: const AlwaysScrollableScrollPhysics(),
-                                        itemCount: _visibleFollowUps.length,
-                                        separatorBuilder: (_, __) => const SizedBox(height: 0),
-                                        itemBuilder: (_, i) {
-                                          final r = _visibleFollowUps[i];
-                                          return _followUpCard(r);
-                                        },
-                                      )),
+                                    : _visibleTasks.isEmpty
+                                        ? ListView(
+                                            physics: const AlwaysScrollableScrollPhysics(),
+                                            children: const [
+                                              SizedBox(height: 80),
+                                              Center(child: Text('No tasks match filters for this day.')),
+                                            ],
+                                          )
+                                        : ListView.builder(
+                                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                                            physics: const AlwaysScrollableScrollPhysics(),
+                                            itemCount: _visibleTasks.length,
+                                            itemBuilder: (_, i) => _taskCard(_visibleTasks[i]),
+                                          )),
                           ),
               ),
             ],
@@ -1290,214 +1057,6 @@ class _CompanyCustomersScreenState extends State<CompanyCustomersScreen>
       bottomNavigationBar: OvalBottomNavBar(
         currentIndex: null,
         onTap: (i) => pushMainShellByIndex(context, i),
-      ),
-    );
-  }
-}
-
-/// Dedicated stateful bottom-sheet avoids `_dependents.isEmpty` assertion seen with
-/// StatefulBuilder + form fields/controller disposal races.
-class _AddCustomerFollowUpBottomSheet extends StatefulWidget {
-  const _AddCustomerFollowUpBottomSheet({
-    required this.customerService,
-    required this.customers,
-    required this.fmtDateTime,
-  });
-
-  final CustomerService customerService;
-  final List<Customer> customers;
-  final String Function(DateTime?) fmtDateTime;
-
-  @override
-  State<_AddCustomerFollowUpBottomSheet> createState() =>
-      _AddCustomerFollowUpBottomSheetState();
-}
-
-class _AddCustomerFollowUpBottomSheetState
-    extends State<_AddCustomerFollowUpBottomSheet> {
-  late final TextEditingController _noteCtrl;
-  late String _customerId;
-  String _actionType = 'call';
-  DateTime? _nextAt;
-  bool _saving = false;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _noteCtrl = TextEditingController();
-    _customerId = widget.customers.firstWhere(
-      (c) => (c.id ?? '').isNotEmpty,
-      orElse: () => widget.customers.first,
-    ).id ??
-        '';
-  }
-
-  @override
-  void dispose() {
-    _noteCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_customerId.isEmpty) {
-      setState(() => _error = 'Select a customer.');
-      return;
-    }
-    if (_noteCtrl.text.trim().isEmpty) {
-      setState(() => _error = 'Note is required.');
-      return;
-    }
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      await widget.customerService.addCustomerFollowUp(
-        customerId: _customerId,
-        note: _noteCtrl.text.trim(),
-        actionType: _actionType,
-        nextFollowUpAt: _nextAt,
-      );
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _saving = false;
-      });
-    }
-  }
-
-  Future<void> _pickDate() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime.now().subtract(const Duration(days: 1)),
-      lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
-    );
-    if (d == null || !mounted) return;
-    setState(() => _nextAt = DateTime(d.year, d.month, d.day, 10));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Add customer follow-up',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.black,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-                  icon: const Icon(Icons.close_rounded, color: Colors.black),
-                  tooltip: 'Close',
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _customerId.isEmpty ? null : _customerId,
-              decoration: const InputDecoration(
-                labelText: 'Customer',
-                border: OutlineInputBorder(),
-                labelStyle: TextStyle(color: Colors.black),
-                hintStyle: TextStyle(color: Colors.black54),
-              ),
-              style: const TextStyle(color: Colors.black),
-              dropdownColor: Colors.white,
-              iconEnabledColor: Colors.black,
-              items: widget.customers
-                  .where((c) => (c.id ?? '').isNotEmpty)
-                  .map(
-                    (c) => DropdownMenuItem(
-                      value: c.id,
-                      child: Text(
-                        '${c.customerName} · ${c.companyName ?? ''}',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (v) => setState(() => _customerId = v ?? ''),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _noteCtrl,
-              style: const TextStyle(color: Colors.black),
-              decoration: const InputDecoration(
-                labelText: 'Note',
-                border: OutlineInputBorder(),
-                labelStyle: TextStyle(color: Colors.black),
-                hintStyle: TextStyle(color: Colors.black54),
-              ),
-              maxLines: 3,
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              value: _actionType,
-              decoration: const InputDecoration(
-                labelText: 'Type',
-                border: OutlineInputBorder(),
-                labelStyle: TextStyle(color: Colors.black),
-                hintStyle: TextStyle(color: Colors.black54),
-              ),
-              style: const TextStyle(color: Colors.black),
-              dropdownColor: Colors.white,
-              iconEnabledColor: Colors.black,
-              items: const [
-                DropdownMenuItem(value: 'call', child: Text('Call')),
-                DropdownMenuItem(value: 'visit', child: Text('Visit')),
-                DropdownMenuItem(value: 'message', child: Text('Message')),
-                DropdownMenuItem(value: 'other', child: Text('Other')),
-              ],
-              onChanged: (v) => setState(() => _actionType = v ?? 'call'),
-            ),
-            const SizedBox(height: 10),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                _nextAt == null
-                    ? 'Next follow-up (optional)'
-                    : widget.fmtDateTime(_nextAt),
-                style: const TextStyle(color: Colors.black),
-              ),
-              trailing: TextButton(
-                onPressed: _pickDate,
-                style: TextButton.styleFrom(foregroundColor: Colors.black),
-                child: const Text(
-                  'Pick',
-                  style: TextStyle(color: Colors.black),
-                ),
-              ),
-            ),
-            if (_error != null)
-              Text(_error!, style: const TextStyle(color: Colors.red)),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: _saving ? null : _submit,
-              child: Text(_saving ? 'Saving…' : 'Save'),
-            ),
-          ],
-        ),
       ),
     );
   }

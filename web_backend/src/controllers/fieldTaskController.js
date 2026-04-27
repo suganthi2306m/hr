@@ -3,7 +3,6 @@ const Task = require('../models/Task');
 const User = require('../models/User');
 const Company = require('../models/Company');
 const Customer = require('../models/Customer');
-const Location = require('../models/Location');
 const {
   TASK_TYPES,
   TASK_PRIORITIES,
@@ -32,7 +31,8 @@ function toTaskDto(taskDoc) {
   const task = taskDoc?.toObject ? taskDoc.toObject() : taskDoc;
   const st = normalizeStatus(task.status);
   const due = task.completionDate ? new Date(task.completionDate).getTime() : null;
-  const delayed = due && due < Date.now() && !['completed', 'verified'].includes(st);
+  const delayed =
+    due && due < Date.now() && !['completed', 'verified', 'cancelled', 'reassigned'].includes(st);
   return {
     _id: task._id,
     taskCode: task.taskCode || null,
@@ -88,7 +88,25 @@ function buildTaskFullDetails(taskDoc) {
         }
       : null,
     assignedBy: task.assignedBy || null,
-    customerId: task.customerId || null,
+    customerId:
+      task.customerId && typeof task.customerId === 'object' && task.customerId._id
+        ? String(task.customerId._id)
+        : task.customerId
+          ? String(task.customerId)
+          : null,
+    customer:
+      task.customerId && typeof task.customerId === 'object' && task.customerId._id
+        ? {
+            _id: task.customerId._id,
+            customerName: task.customerId.customerName || '',
+            companyName: task.customerId.companyName || '',
+            address: task.customerId.address || '',
+            city: task.customerId.city || '',
+            pincode: task.customerId.pincode || '',
+            customerNumber: task.customerId.customerNumber || '',
+            emailId: task.customerId.emailId || '',
+          }
+        : null,
     companyId: task.companyId || task.businessId || null,
     assignedDate: task.assignedDate || null,
     completionDate: task.completionDate || task.expectedCompletionDate || null,
@@ -137,6 +155,7 @@ function buildTaskFullDetails(taskDoc) {
     source: task.source || null,
     createdAt: task.createdAt || null,
     updatedAt: task.updatedAt || null,
+    note: task.note || '',
   };
 }
 
@@ -408,6 +427,11 @@ async function updateFieldTask(req, res, next) {
     }
     if (req.body.completionDate) payload.completionDate = new Date(req.body.completionDate);
 
+    if (req.body.note !== undefined) {
+      const n = String(req.body.note || '').trim();
+      payload.note = n.slice(0, 8000);
+    }
+
     if (req.body.photoDetails != null) payload.photoDetails = req.body.photoDetails;
     if (req.body.signatureDataUrl != null) payload.signatureDataUrl = String(req.body.signatureDataUrl).slice(0, 400000);
     if (Array.isArray(req.body.proofAttachments)) {
@@ -498,6 +522,105 @@ async function deleteFieldTask(req, res, next) {
   }
 }
 
+/** Clone task to another user; marks original as `reassigned` and links copy. */
+async function reassignCloneFieldTask(req, res, next) {
+  try {
+    const companyId = await getCompanyIdForAdmin(req.admin._id);
+    if (!companyId) {
+      return res.status(400).json({ message: 'Complete company setup to manage tasks.' });
+    }
+    const taskId = req.params.id;
+    const targetUserId = req.body.assignedTo || req.body.assignedUser;
+    if (!targetUserId || !mongoose.Types.ObjectId.isValid(String(targetUserId))) {
+      return res.status(400).json({ message: 'assignedTo user id is required' });
+    }
+
+    const existing = await Task.findOne({
+      _id: taskId,
+      $or: [{ companyId }, { companyId: { $exists: false } }],
+    });
+    if (!existing) {
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    const assignedUser = await User.findOne({ _id: targetUserId, companyId }).select('_id name email').lean();
+    if (!assignedUser) {
+      return res.status(400).json({ message: 'Selected user is not part of your company.' });
+    }
+
+    if (String(existing.assignedTo) === String(assignedUser._id)) {
+      return res.status(400).json({ message: 'Task is already assigned to this user.' });
+    }
+
+    const loc = existing.locations || {};
+    const dest = loc.destination;
+    if (!dest || dest.lat == null || dest.lng == null) {
+      return res.status(400).json({ message: 'Task is missing destination; cannot copy for reassignment.' });
+    }
+
+    const newDoc = {
+      taskCode: generateTaskCode(),
+      taskName: existing.taskName || existing.taskTitle || 'Untitled Task',
+      description: existing.description || '',
+      taskType: existing.taskType || 'visit',
+      priority: existing.priority || 'medium',
+      branchId: existing.branchId || '',
+      status: normalizeStatus('assigned'),
+      assignedTo: assignedUser._id,
+      assignedBy: req.admin._id,
+      companyId: existing.companyId || companyId,
+      ...(existing.customerId ? { customerId: existing.customerId } : {}),
+      completionDate: existing.completionDate || undefined,
+      locations: {
+        ...(loc.source ? { source: loc.source } : {}),
+        destination: dest,
+      },
+      statusTimestamps: applyStatusTimestamps({}, 'assigned'),
+      source: 'web',
+      note: `Copy of ${existing.taskCode || 'task'}. Reassigned from previous assignee.`,
+    };
+    if (existing.geofence && existing.geofence.lat != null) {
+      newDoc.geofence = existing.geofence;
+    }
+
+    const created = await Task.create(newDoc);
+    const populated = await Task.findById(created._id).populate('assignedTo', 'name email');
+
+    const stamp = new Date().toISOString();
+    const prevNote = String(existing.note || '').trim();
+    const noteLine = `[${stamp}] Reassigned to ${assignedUser.name || 'user'} — new task ${populated.taskCode}`;
+    const mergedNote = (prevNote ? `${prevNote}\n` : '') + noteLine;
+
+    await Task.findByIdAndUpdate(existing._id, {
+      $set: {
+        status: 'reassigned',
+        reassignedTo: assignedUser._id,
+        reassignedCopyTaskId: created._id,
+        note: mergedNote.slice(0, 8000),
+        statusTimestamps: applyStatusTimestamps(existing, 'reassigned'),
+      },
+    });
+
+    await logActivity({
+      companyId,
+      adminId: req.admin._id,
+      action: 'task.reassign_clone',
+      entity: 'Task',
+      entityId: existing._id,
+      details: { newTaskId: String(created._id), assigneeId: String(assignedUser._id) },
+      ip: req.ip,
+    });
+
+    const origUpdated = await Task.findById(existing._id).populate('assignedTo', 'name email');
+    return res.status(201).json({
+      original: toTaskDto(origUpdated),
+      copy: toTaskDto(populated),
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getFieldTaskDetails(req, res, next) {
   try {
     const companyId = await getCompanyIdForAdmin(req.admin._id);
@@ -508,51 +631,16 @@ async function getFieldTaskDetails(req, res, next) {
     const task = await Task.findOne({
       _id: req.params.id,
       $or: [{ companyId }, { companyId: { $exists: false } }],
-    }).populate('assignedTo', 'name email');
+    })
+      .populate('assignedTo', 'name email')
+      .populate('customerId', 'customerName companyName address city pincode customerNumber emailId');
     if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
 
-    const taskIdCandidates = [task._id, String(task._id), task.taskCode].filter(Boolean);
-
-    const pathRaw = await Location.find({ taskId: { $in: taskIdCandidates } })
-      .sort({ timestamp: 1, createdAt: 1 })
-      .lean();
-
-    const locations = pathRaw.map((p) => ({
-      _id: p._id,
-      taskId: p.taskId || null,
-      usersId: p.usersId || p.userId || p.staffId || null,
-      latitude: p.latitude != null ? Number(p.latitude) : null,
-      longitude: p.longitude != null ? Number(p.longitude) : null,
-      timestamp: p.timestamp || p.time || p.createdAt || null,
-      movementType: p.movementType || null,
-      status: p.status || null,
-      exitStatus: p.exitStatus || null,
-      exitReason: p.exitReason || null,
-      batteryPercent: p.batteryPercent ?? null,
-      address: p.address || p.fullAddress || null,
-      pincode: p.pincode || null,
-      city: p.city || null,
-      area: p.area || null,
-    }));
-
-    const path = locations
-      .filter((p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude))
-      .map((p) => ({
-        latitude: p.latitude,
-        longitude: p.longitude,
-        timestamp: p.timestamp,
-        status: p.status,
-        movementType: p.movementType,
-        address: p.address,
-      }));
-
     return res.json({
       item: toTaskDto(task),
       taskDetails: buildTaskFullDetails(task),
-      locations,
-      path,
     });
   } catch (error) {
     return next(error);
@@ -567,4 +655,5 @@ module.exports = {
   updateFieldTask,
   deleteFieldTask,
   getFieldTaskDetails,
+  reassignCloneFieldTask,
 };

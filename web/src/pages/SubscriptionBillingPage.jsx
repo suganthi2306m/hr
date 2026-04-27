@@ -182,7 +182,7 @@ function PaymentCheckoutModal({ session, onClose, onCheckStatus, checkBusy }) {
       })
       .catch(() => {
         if (!alive) return;
-        setQrError('Could not generate QR. Use Open UPI app or copy link.');
+        setQrError('Could not generate QR. Copy the UPI link below.');
       });
     return () => {
       alive = false;
@@ -281,17 +281,19 @@ function PaymentCheckoutModal({ session, onClose, onCheckStatus, checkBusy }) {
               <IconRefresh className="shrink-0" />
               {checkBusy ? 'Checking…' : "I've paid – Check status"}
             </button>
+            {!isUpi ? (
+              <button
+                type="button"
+                onClick={openExternal}
+                disabled={!canOpenExternal}
+                className="btn-secondary inline-flex min-h-11 items-center justify-center whitespace-nowrap border-neutral-200 bg-white px-3 text-center text-sm text-slate-700 hover:bg-neutral-50 disabled:opacity-60"
+              >
+                Open in browser
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={openExternal}
-              disabled={!canOpenExternal}
-              className="btn-secondary inline-flex min-h-11 items-center justify-center whitespace-nowrap border-neutral-200 bg-white px-3 text-center text-sm text-slate-700 hover:bg-neutral-50 disabled:opacity-60"
-            >
-              {isUpi ? 'Open UPI app' : 'Open in browser'}
-            </button>
-            <button
-              type="button"
-              className="btn-primary inline-flex min-h-11 items-center justify-center gap-1.5 whitespace-nowrap border border-primary/20 px-3 text-sm"
+              className={`btn-primary inline-flex min-h-11 items-center justify-center gap-1.5 whitespace-nowrap border border-primary/20 px-3 text-sm${isUpi ? ' sm:col-span-2' : ''}`}
               onClick={() => void copyLink()}
             >
               <IconCopy className="shrink-0" />

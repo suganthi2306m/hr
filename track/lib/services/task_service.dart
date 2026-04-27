@@ -216,6 +216,8 @@ class TaskService {
   Future<Task> updateTask(
     String id, {
     String? status,
+    /// Optional note stored with the task (PATCH body; backend `strict: false`).
+    String? note,
     DateTime? startTime,
     double? startLat,
     double? startLng,
@@ -230,6 +232,7 @@ class TaskService {
       await _setToken();
       final body = <String, dynamic>{};
       if (status != null) body['status'] = status;
+      if (note != null && note.isNotEmpty) body['note'] = note;
       if (startTime != null) {
         body['startTime'] = startTime.toUtc().toIso8601String();
       }
@@ -323,6 +326,15 @@ class TaskService {
     String? area,
     String? pincode,
   }) async {
+    if (!AppConstants.isWithinLocationTrackingWindow()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint(
+          '[Trackings] task_store SKIP outside window '
+          '(allowed: 09:00-19:30 local)',
+        );
+      }
+      return false;
+    }
     await _setToken();
     final capturedAt = DateTime.now().toUtc();
     final outlierDecision = await TrackingOutlierFilterService.evaluate(

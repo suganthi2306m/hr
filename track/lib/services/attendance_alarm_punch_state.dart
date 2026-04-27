@@ -82,25 +82,17 @@ class AttendanceAlarmPunchState {
 
   /// Refreshes stored punch flags from server history (newest rows may be any day).
   ///
-  /// If [history] contains no row for **today** (e.g. month-only fetch), any existing
-  /// snapshot for today is kept so alarms stay accurate.
+  /// Uses [buildPunchByYmd] so **today** follows the latest check-in row for that calendar
+  /// day (open session is not overwritten by an older completed row). If [history] has
+  /// no row for today, clears today unless an existing same-ymd snapshot is kept for
+  /// brief server lag (same as before).
   static Future<void> syncFromHistory(List<AttendanceRecord> history) async {
     final today = DateDisplayUtil.dateOnlyLocal(DateTime.now());
     final ymd = ymdFromDate(today);
-    var ci = false;
-    var co = false;
-    var foundToday = false;
-    for (final r in history) {
-      final day = r.attendanceDate != null
-          ? DateDisplayUtil.dateOnlyLocal(r.attendanceDate!)
-          : DateDisplayUtil.dateOnlyLocal(r.checkInTime);
-      if (day != today) continue;
-      foundToday = true;
-      ci = true;
-      if (r.checkOutTime != null) co = true;
-    }
+    final punchByYmd = buildPunchByYmd(history);
+    final p = punchByYmd[ymd];
     final prefs = await SharedPreferences.getInstance();
-    if (!foundToday) {
+    if (p == null) {
       final raw = prefs.getString(_k);
       if (raw != null && raw.isNotEmpty) {
         try {
@@ -111,7 +103,7 @@ class AttendanceAlarmPunchState {
       await prefs.setString(_k, jsonEncode({'ymd': ymd, 'ci': false, 'co': false}));
       return;
     }
-    await prefs.setString(_k, jsonEncode({'ymd': ymd, 'ci': ci, 'co': co}));
+    await persistTodayFromPunchMap(punchByYmd);
   }
 
   /// Call after a successful online check-in or check-out (including replay from the pending queue).

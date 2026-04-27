@@ -26,7 +26,6 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   Map<String, dynamic>? _user;
   bool _loading = true;
-  bool _savingPersonal = false;
 
   @override
   void initState() {
@@ -183,147 +182,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _showPersonalEditSheet() async {
     final u = _user ?? const <String, dynamic>{};
-    final phoneCtrl = TextEditingController(
-      text: _valueByPaths(u, ['phone', 'mobile', 'phoneNumber']) ?? '',
-    );
-    final personalEmailCtrl = TextEditingController(
-      text: _valueByPaths(u, ['personalEmail']) ?? '',
-    );
-    final emergencyCtrl = TextEditingController(
-      text: _valueByPaths(u, ['emergencyContact']) ?? '',
-    );
-    final permanentAddressCtrl = TextEditingController(
-      text: _valueByPaths(u, ['permanentAddress', 'address', 'streetAddress']) ?? '',
-    );
-    final localAddressCtrl = TextEditingController(
-      text: _valueByPaths(u, ['localAddress']) ?? '',
-    );
-
+    final parentContext = context;
     await showModalBottomSheet<void>(
-      context: context,
+      context: parentContext,
       isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            Future<void> save() async {
-              setModalState(() => _savingPersonal = true);
-              final payload = <String, dynamic>{
-                'phone': phoneCtrl.text.trim(),
-                'personalEmail': personalEmailCtrl.text.trim(),
-                'emergencyContact': emergencyCtrl.text.trim(),
-                'permanentAddress': permanentAddressCtrl.text.trim(),
-                'localAddress': localAddressCtrl.text.trim(),
-              };
-              payload.removeWhere((_, value) => value.toString().trim().isEmpty);
-              final res = await AuthService().updateProfile(payload);
-              if (!mounted || !ctx.mounted) return;
-              setModalState(() => _savingPersonal = false);
-              if (res['success'] == true) {
-                Navigator.of(ctx).pop();
-                AppFeedback.success(context, 'Personal details updated');
-                await _loadProfile();
-              } else {
-                AppFeedback.error(
-                  context,
-                  res['message']?.toString() ?? 'Failed to update details',
-                );
-              }
-            }
-
-            InputDecoration deco(String label, {IconData? icon}) => InputDecoration(
-              labelText: label,
-              prefixIcon: icon == null ? null : Icon(icon, size: 20),
-              filled: true,
-              fillColor: const Color(0xFFF7F7F8),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-            );
-
-            return Padding(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                14,
-                16,
-                MediaQuery.of(ctx).viewInsets.bottom + 16,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Edit personal details',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: phoneCtrl,
-                      keyboardType: TextInputType.phone,
-                      decoration: deco('Phone', icon: Icons.call_outlined),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: personalEmailCtrl,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: deco('Personal email', icon: Icons.mail_outline),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: emergencyCtrl,
-                      keyboardType: TextInputType.phone,
-                      decoration: deco('Emergency contact', icon: Icons.contact_phone_outlined),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: permanentAddressCtrl,
-                      maxLines: 2,
-                      decoration: deco('Permanent address'),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: localAddressCtrl,
-                      maxLines: 2,
-                      decoration: deco('Local address'),
-                    ),
-                    const SizedBox(height: 14),
-                    FilledButton(
-                      onPressed: _savingPersonal ? null : save,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.black87,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      child: _savingPersonal
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text(
-                              'Save',
-                              style: TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (_) => _PersonalDetailsEditSheet(
+        parentContext: parentContext,
+        phone: _valueByPaths(u, ['phone', 'mobile', 'phoneNumber']) ?? '',
+        personalEmail: _valueByPaths(u, ['personalEmail']) ?? '',
+        emergency: _valueByPaths(u, ['emergencyContact']) ?? '',
+        permanentAddress:
+            _valueByPaths(u, ['permanentAddress', 'address', 'streetAddress']) ?? '',
+        localAddress: _valueByPaths(u, ['localAddress']) ?? '',
+        onReloadProfile: _loadProfile,
+      ),
     );
-
-    phoneCtrl.dispose();
-    personalEmailCtrl.dispose();
-    emergencyCtrl.dispose();
-    permanentAddressCtrl.dispose();
-    localAddressCtrl.dispose();
   }
 
   Widget _buildSectionCard({
@@ -455,7 +332,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
-                color: AppColors.primary,
+                color: AppColors.primaryOnLightText,
               ),
             ),
             const SizedBox(height: 4),
@@ -991,6 +868,193 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PersonalDetailsEditSheet extends StatefulWidget {
+  const _PersonalDetailsEditSheet({
+    required this.parentContext,
+    required this.phone,
+    required this.personalEmail,
+    required this.emergency,
+    required this.permanentAddress,
+    required this.localAddress,
+    required this.onReloadProfile,
+  });
+
+  final BuildContext parentContext;
+  final String phone;
+  final String personalEmail;
+  final String emergency;
+  final String permanentAddress;
+  final String localAddress;
+  final Future<void> Function() onReloadProfile;
+
+  @override
+  State<_PersonalDetailsEditSheet> createState() => _PersonalDetailsEditSheetState();
+}
+
+class _PersonalDetailsEditSheetState extends State<_PersonalDetailsEditSheet> {
+  late final TextEditingController _phoneCtrl;
+  late final TextEditingController _personalEmailCtrl;
+  late final TextEditingController _emergencyCtrl;
+  late final TextEditingController _permanentAddressCtrl;
+  late final TextEditingController _localAddressCtrl;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _phoneCtrl = TextEditingController(text: widget.phone);
+    _personalEmailCtrl = TextEditingController(text: widget.personalEmail);
+    _emergencyCtrl = TextEditingController(text: widget.emergency);
+    _permanentAddressCtrl = TextEditingController(text: widget.permanentAddress);
+    _localAddressCtrl = TextEditingController(text: widget.localAddress);
+  }
+
+  @override
+  void dispose() {
+    _phoneCtrl.dispose();
+    _personalEmailCtrl.dispose();
+    _emergencyCtrl.dispose();
+    _permanentAddressCtrl.dispose();
+    _localAddressCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    final payload = <String, dynamic>{
+      'phone': _phoneCtrl.text.trim(),
+      'personalEmail': _personalEmailCtrl.text.trim(),
+      'emergencyContact': _emergencyCtrl.text.trim(),
+      'permanentAddress': _permanentAddressCtrl.text.trim(),
+      'localAddress': _localAddressCtrl.text.trim(),
+    };
+    payload.removeWhere((_, value) => value.toString().trim().isEmpty);
+    final res = await AuthService().updateProfile(payload);
+    if (!mounted) return;
+    if (res['success'] == true) {
+      Navigator.of(context).pop();
+      if (widget.parentContext.mounted) {
+        AppFeedback.success(widget.parentContext, 'Personal details updated');
+      }
+      await widget.onReloadProfile();
+      return;
+    }
+    setState(() => _saving = false);
+    if (widget.parentContext.mounted) {
+      AppFeedback.error(
+        widget.parentContext,
+        res['message']?.toString() ?? 'Failed to update details',
+      );
+    }
+  }
+
+  static const Color _editLabelGrey = Color(0xFF757575);
+  static const Color _editHintGrey = Color(0xFF9E9E9E);
+
+  InputDecoration _deco(String label, {IconData? icon}) => InputDecoration(
+        labelText: label,
+        floatingLabelBehavior: FloatingLabelBehavior.auto,
+        labelStyle: const TextStyle(
+          color: _editLabelGrey,
+          fontWeight: FontWeight.w500,
+          fontSize: 15,
+        ),
+        floatingLabelStyle: const TextStyle(
+          color: Color(0xFF616161),
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+        ),
+        hintStyle: const TextStyle(
+          color: _editHintGrey,
+          fontWeight: FontWeight.w400,
+          fontSize: 15,
+        ),
+        prefixIcon: icon == null ? null : Icon(icon, size: 20, color: _editLabelGrey),
+        filled: true,
+        fillColor: const Color(0xFFF7F7F8),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        14,
+        16,
+        MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Edit personal details',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: _deco('Phone', icon: Icons.call_outlined),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _personalEmailCtrl,
+              keyboardType: TextInputType.emailAddress,
+              decoration: _deco('Personal email', icon: Icons.mail_outline),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _emergencyCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: _deco('Emergency contact', icon: Icons.contact_phone_outlined),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _permanentAddressCtrl,
+              maxLines: 2,
+              decoration: _deco('Permanent address'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _localAddressCtrl,
+              maxLines: 2,
+              decoration: _deco('Local address'),
+            ),
+            const SizedBox(height: 14),
+            FilledButton(
+              onPressed: _saving ? null : _save,
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.black87,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              child: _saving
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.black54,
+                      ),
+                    )
+                  : const Text(
+                      'Save',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+            ),
+          ],
         ),
       ),
     );

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/client';
 import SlideOverPanel from '../components/common/SlideOverPanel';
+import TablePagination from '../components/common/TablePagination';
 import UiSelect from '../components/common/UiSelect';
 import MapLocationPickerScreen from '../components/map/MapLocationPickerScreen';
 import { useGoogleMaps } from '../context/GoogleMapsContext';
@@ -46,8 +47,6 @@ export default function LeadsOverviewPage() {
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [form, setForm] = useState(() => emptyForm());
@@ -58,14 +57,24 @@ export default function LeadsOverviewPage() {
   const [submitError, setSubmitError] = useState('');
   const [mapPickerOpen, setMapPickerOpen] = useState(false);
   const [lastMapPin, setLastMapPin] = useState(null);
+  const [listPage, setListPage] = useState(1);
+  const [listPageSize, setListPageSize] = useState(10);
   const { isLoaded } = useGoogleMaps();
 
-  const load = async () => {
+  const load = async (filterOverride) => {
+    setListPage(1);
     setLoading(true);
     setError('');
+    const effectiveSearch = filterOverride && 'search' in filterOverride ? filterOverride.search : query;
+    const effectiveStatus = filterOverride && 'status' in filterOverride ? filterOverride.status : statusFilter;
     try {
       const [{ data }, { data: u }] = await Promise.all([
-        apiClient.get('/leads', { params: { search: query, status: statusFilter, from: from || undefined, to: to || undefined } }),
+        apiClient.get('/leads', {
+          params: {
+            search: effectiveSearch,
+            status: effectiveStatus,
+          },
+        }),
         apiClient.get('/users'),
       ]);
       setItems(Array.isArray(data?.items) ? data.items : []);
@@ -92,22 +101,43 @@ export default function LeadsOverviewPage() {
     setSelectedLeadIds((old) => old.filter((id) => items.some((x) => String(x._id) === id)));
   }, [items]);
 
-  const allSelected = items.length > 0 && items.every((x) => selectedLeadIds.includes(String(x._id)));
+  const pagedItems = useMemo(() => {
+    const start = (listPage - 1) * listPageSize;
+    return items.slice(start, start + listPageSize);
+  }, [items, listPage, listPageSize]);
+
+  const listTotalPages = Math.max(1, Math.ceil(items.length / listPageSize));
+
+  useEffect(() => {
+    if (listPage > listTotalPages) setListPage(listTotalPages);
+  }, [listPage, listTotalPages]);
+
+  const allPageRowsSelected =
+    pagedItems.length > 0 && pagedItems.every((x) => selectedLeadIds.includes(String(x._id)));
   const selectedVisibleLeads = useMemo(
     () => items.filter((r) => selectedLeadIds.includes(String(r._id))),
     [items, selectedLeadIds],
   );
 
   const toggleSelectAll = () => {
-    if (allSelected) {
-      setSelectedLeadIds([]);
+    const pageIds = pagedItems.map((x) => String(x._id));
+    if (!pageIds.length) return;
+    if (allPageRowsSelected) {
+      setSelectedLeadIds((old) => old.filter((id) => !pageIds.includes(id)));
       return;
     }
-    setSelectedLeadIds(items.map((x) => String(x._id)));
+    setSelectedLeadIds((old) => [...new Set([...old, ...pageIds])]);
   };
 
   const toggleSelectLead = (id) => {
     setSelectedLeadIds((old) => (old.includes(id) ? old.filter((x) => x !== id) : [...old, id]));
+  };
+
+  const resetLeadFiltersAndReload = () => {
+    setQuery('');
+    setStatusFilter('');
+    setSelectedLeadIds([]);
+    void load({ search: '', status: '' });
   };
 
   const userOptions = useMemo(
@@ -363,14 +393,18 @@ export default function LeadsOverviewPage() {
               className="py-2.5"
             />
           </div>
-          <div className="min-w-[9rem] sm:w-[11rem]">
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-primary">From</label>
-            <input type="date" className="form-input py-2.5" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </div>
-          <div className="min-w-[9rem] sm:w-[11rem]">
-            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-primary">To</label>
-            <input type="date" className="form-input py-2.5" value={to} onChange={(e) => setTo(e.target.value)} />
-          </div>
+          <button
+            type="button"
+            className="btn-secondary inline-flex h-10 w-10 shrink-0 items-center justify-center p-0"
+            title="Reset filters and reload"
+            aria-label="Reset filters and reload"
+            onClick={() => resetLeadFiltersAndReload()}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden>
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             Apply
           </button>
@@ -383,9 +417,9 @@ export default function LeadsOverviewPage() {
                   <th className="w-10 px-3 py-2">
                     <input
                       type="checkbox"
-                      checked={allSelected}
+                      checked={allPageRowsSelected}
                       onChange={toggleSelectAll}
-                      aria-label="Select all leads"
+                      aria-label="Select all leads on this page"
                     />
                   </th>
                   <th className="px-3 py-2">Lead</th>
@@ -405,7 +439,7 @@ export default function LeadsOverviewPage() {
                     </td>
                   </tr>
                 ) : items.length ? (
-                  items.map((row) => (
+                  pagedItems.map((row) => (
                     <tr key={row._id} className="cursor-pointer border-t border-neutral-100 hover:bg-primary/5" onClick={() => navigate(`/dashboard/track/leads/${row._id}`)}>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <input
@@ -446,6 +480,21 @@ export default function LeadsOverviewPage() {
               </tbody>
             </table>
           </div>
+        {!loading && (
+          <div className="mt-4">
+            <TablePagination
+              page={listPage}
+              pageSize={listPageSize}
+              totalCount={items.length}
+              onPageChange={(next) => setListPage(Math.max(1, next))}
+              onPageSizeChange={(nextSize) => {
+                setListPageSize(nextSize);
+                setListPage(1);
+              }}
+              pageSizeOptions={[10, 25, 50]}
+            />
+          </div>
+        )}
       </div>
 
       <SlideOverPanel

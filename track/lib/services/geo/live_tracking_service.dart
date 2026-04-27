@@ -417,6 +417,7 @@ class LiveTrackingService {
     double? accuracyM,
   }) async {
     try {
+      if (!AppConstants.isWithinLocationTrackingWindow()) return;
       final prefs = await SharedPreferences.getInstance();
       final active = prefs.getBool(_keyActive);
       if (active != true) return;

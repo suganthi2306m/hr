@@ -147,8 +147,8 @@ class _VisitsScreenState extends State<VisitsScreen>
     final Widget target = switch (index) {
       0 => const AttendanceSummaryScreen(),
       1 => const DashboardScreen(),
-      3 => const CompanyCustomersScreen(),
-      4 => const LeadListScreen(),
+      3 => const LeadListScreen(),
+      4 => const CompanyCustomersScreen(),
       _ => const VisitsScreen(),
     };
     Navigator.pushReplacement(

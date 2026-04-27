@@ -51,6 +51,10 @@ typedef _PresenceSendOutcome = ({
 });
 
 class PresenceTrackingService {
+  static bool _isWithinLocationTrackingWindow([DateTime? now]) {
+    return AppConstants.isWithinLocationTrackingWindow(now);
+  }
+
   static bool _looksLikeMissingPlugin(Object error) {
     return error is MissingPluginException ||
         error.toString().contains('No implementation found for method initialized');
@@ -419,6 +423,7 @@ class PresenceTrackingService {
     double? accuracyM,
     double? speedMps,
   }) async {
+    if (!_isWithinLocationTrackingWindow()) return;
     if (await LiveTrackingService().isActive()) return;
     if (!await isBackgroundPresenceEnabled()) return;
 
@@ -1205,6 +1210,7 @@ class PresenceTrackingService {
       stopTracking();
       return;
     }
+    if (!_isWithinLocationTrackingWindow()) return;
 
     final gf = branchGeofence;
 
@@ -1314,9 +1320,14 @@ class PresenceTrackingService {
       stopTracking();
       return;
     }
+    if (!_isWithinLocationTrackingWindow()) return;
     _periodicTickInProgress = true;
     try {
       final status = await getPresenceStatus();
+      if (status['canTrack'] != true) {
+        await stopTracking();
+        return;
+      }
       final gf = status['branchGeofence'] as Map<String, dynamic>?;
       await _tick(gf);
     } catch (e, _) {
@@ -1350,8 +1361,16 @@ class PresenceTrackingService {
     await MovementClassificationService().start();
     await flushPendingPresenceQueue();
     await _ensureBackgroundPresenceTracking();
+    if (!_isWithinLocationTrackingWindow()) {
+      _restartPeriodicPresenceTimer();
+      return;
+    }
     try {
       final status = await getPresenceStatus();
+      if (status['canTrack'] != true) {
+        await stopTracking();
+        return;
+      }
       final gf = status['branchGeofence'] as Map<String, dynamic>?;
       await _tick(gf);
     } catch (e) {
@@ -1367,6 +1386,7 @@ class PresenceTrackingService {
   Future<void> recordAppOpened() async {
     if (_taskInProgress) return;
     if (!await isTrackingAllowed()) return;
+    if (!_isWithinLocationTrackingWindow()) return;
     await markAppForeground();
 
     try {
@@ -1381,6 +1401,7 @@ class PresenceTrackingService {
       );
       final movementType = await _classifyForegroundMovement(position);
       final presenceState = await getPresenceStatus();
+      if (presenceState['canTrack'] != true) return;
       final apiGf = presenceState['branchGeofence'] as Map<String, dynamic>?;
       final effectiveGf = await _effectiveOfficeGeofence(apiGf);
       final presenceStatus = _isInsideOffice(
@@ -1434,11 +1455,13 @@ class PresenceTrackingService {
     if (_sendingAppClosed) return;
     if (_taskInProgress) return;
     if (!await isTrackingAllowed()) return;
+    if (!_isWithinLocationTrackingWindow()) return;
 
     _sendingAppClosed = true;
     await markAppClosed();
     try {
       final status = await getPresenceStatus();
+      if (status['canTrack'] != true) return;
       final branchGeofence = status['branchGeofence'] as Map<String, dynamic>?;
       final effectiveGf = await _effectiveOfficeGeofence(branchGeofence);
       final position = await _capturePresencePosition();

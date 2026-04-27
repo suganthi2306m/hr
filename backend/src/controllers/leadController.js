@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { Lead, LEAD_STATUSES } = require('../models/Lead');
+const LeadFollowUp = require('../models/LeadFollowUp');
 const User = require('../models/User');
 const Customer = require('../models/Customer');
 const Company = require('../models/Company');
@@ -29,6 +30,23 @@ function endOfDay(d) {
   const x = new Date(d);
   x.setHours(23, 59, 59, 999);
   return x;
+}
+
+function toCompanyObjectId(businessId) {
+  const s = String(businessId || '');
+  if (!s || !mongoose.Types.ObjectId.isValid(s) || s.length !== 24) return null;
+  return new mongoose.Types.ObjectId(s);
+}
+
+/** Same visibility as embedded follow-ups: creator, follow-up assignee, lead assignee, or lead creator. */
+function followUpVisibleToUser(f, leadRow, user) {
+  const uid = String(user?._id || '');
+  return (
+    String(f.createdByUserId?._id || f.createdByUserId || '') === uid ||
+    String(f.assignedToUserId?._id || f.assignedToUserId || '') === uid ||
+    String(leadRow?.assignedTo?._id || leadRow?.assignedTo || '') === uid ||
+    String(leadRow?.createdBy || '') === uid
+  );
 }
 
 async function validateAssignee(businessId, userId) {
@@ -121,12 +139,123 @@ exports.getLeadById = async (req, res) => {
       .populate('followUps.assignedToUserId', 'name email')
       .lean();
     if (!row) return res.status(404).json({ message: 'Lead not found.' });
-    if (!hasPrivilegedRole(req.user?.role) && String(row.assignedTo?._id || row.assignedTo || '') !== String(req.user?._id || '')) {
-      return res.status(403).json({ message: 'Access denied.' });
+    const privileged = hasPrivilegedRole(req.user?.role);
+    if (!privileged) {
+      const uid = String(req.user?._id || '');
+      const isAssignee = String(row.assignedTo?._id || row.assignedTo || '') === uid;
+      const isCreator = String(row.createdBy || '') === uid;
+      let allowed = isAssignee || isCreator;
+      if (!allowed) {
+        const n = await LeadFollowUp.countDocuments({
+          leadId: row._id,
+          assignedToUserId: req.user._id,
+        });
+        allowed = n > 0;
+      }
+      if (!allowed) return res.status(403).json({ message: 'Access denied.' });
     }
+
+    const webFollowUps = await LeadFollowUp.find({ leadId: row._id })
+      .populate('assignedToUserId', 'name email')
+      .populate('createdByUserId', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
+    const mappedWeb = webFollowUps.map((f) => ({
+      _id: f._id,
+      note: f.note,
+      actionType: f.actionType || 'call',
+      nextFollowUpAt: f.nextFollowUpAt,
+      statusAfter: f.statusAfter,
+      assignedToUserId: f.assignedToUserId || null,
+      createdByUserId: f.createdByUserId || null,
+      createdAt: f.createdAt,
+      updatedAt: f.updatedAt,
+      history: Array.isArray(f.history) ? f.history : [],
+    }));
+    const embedded = Array.isArray(row.followUps) ? row.followUps : [];
+    row.followUps = [...embedded, ...mappedWeb].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+    );
+    if (!privileged) {
+      row.followUps = (row.followUps || []).filter((f) => followUpVisibleToUser(f, row, req.user));
+    }
+
     return res.status(200).json({ item: row });
   } catch (e) {
     return res.status(500).json({ message: e.message || 'Failed to fetch lead.' });
+  }
+};
+
+/**
+ * All follow-ups on one lead visible to the current user (embedded + web CRM), deduped, newest first.
+ */
+exports.listLeadFollowUpsHistory = async (req, res) => {
+  try {
+    const businessId = tenantId(req);
+    if (!businessId) return res.status(200).json({ items: [] });
+    const privileged = hasPrivilegedRole(req.user?.role);
+    const row = await Lead.findOne({ _id: req.params.id, businessId })
+      .select('leadName companyName status followUps assignedTo createdBy')
+      .populate('followUps.createdByUserId', 'name email')
+      .populate('followUps.assignedToUserId', 'name email')
+      .lean();
+    if (!row) return res.status(404).json({ message: 'Lead not found.' });
+
+    if (!privileged) {
+      const uid = String(req.user?._id || '');
+      const isAssignee = String(row.assignedTo?._id || row.assignedTo || '') === uid;
+      const isCreator = String(row.createdBy || '') === uid;
+      let allowed = isAssignee || isCreator;
+      if (!allowed) {
+        const n = await LeadFollowUp.countDocuments({
+          leadId: row._id,
+          assignedToUserId: req.user._id,
+        });
+        allowed = n > 0;
+      }
+      if (!allowed) return res.status(403).json({ message: 'Access denied.' });
+    }
+
+    const items = [];
+    const seenIds = new Set();
+
+    const pushItem = (f) => {
+      if (!privileged && !followUpVisibleToUser(f, row, req.user)) return;
+      const idStr = String(f._id || '');
+      if (!idStr || seenIds.has(idStr)) return;
+      seenIds.add(idStr);
+      items.push({
+        followUpId: f._id,
+        leadId: row._id,
+        leadName: row.leadName,
+        companyName: row.companyName,
+        status: row.status,
+        followUpType: f.actionType || 'call',
+        nextFollowUpDate: f.nextFollowUpAt || null,
+        notes: f.note || '',
+        notesPreview: String(f.note || '').slice(0, 120),
+        createdBy: f.createdByUserId || null,
+        createdAt: f.createdAt || null,
+        updatedAt: f.updatedAt || null,
+        assignedTo: f.assignedToUserId || null,
+        statusAfter: f.statusAfter || null,
+        history: Array.isArray(f.history) ? f.history : [],
+      });
+    };
+
+    (row.followUps || []).forEach((f) => pushItem(f));
+
+    const webDocs = await LeadFollowUp.find({ leadId: row._id })
+      .populate('assignedToUserId', 'name email')
+      .populate('createdByUserId', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
+    webDocs.forEach((f) => pushItem(f));
+
+    items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return res.status(200).json({ items });
+  } catch (e) {
+    return res.status(500).json({ message: e.message || 'Failed to fetch follow-up history.' });
   }
 };
 
@@ -381,10 +510,84 @@ exports.updateFollowUp = async (req, res) => {
     if (!row) return res.status(404).json({ message: 'Lead not found.' });
     const privileged = hasPrivilegedRole(req.user?.role);
     const assignedToCurrent = String(row.assignedTo || '') === String(req.user?._id || '');
+
+    const followEmbedded = (row.followUps || []).id(req.params.followUpId);
+    const webDoc = followEmbedded ? null : await LeadFollowUp.findOne({ _id: req.params.followUpId, leadId: row._id });
+
+    if (!followEmbedded && !webDoc) {
+      return res.status(404).json({ message: 'Follow-up not found.' });
+    }
+
+    if (webDoc) {
+      const leadLean = row.toObject();
+      const fuLean = webDoc.toObject();
+      if (!privileged && !assignedToCurrent && !followUpVisibleToUser(fuLean, leadLean, req.user)) {
+        return res.status(403).json({ message: 'Access denied.' });
+      }
+
+      if (req.body.note != null) {
+        const nextNote = String(req.body.note || '').trim();
+        if (!nextNote) return res.status(400).json({ message: 'Follow-up note is required.' });
+        webDoc.note = nextNote;
+      }
+      if (req.body.actionType != null) {
+        const nextType = String(req.body.actionType || '').toLowerCase();
+        webDoc.actionType = ['call', 'visit', 'message', 'other'].includes(nextType) ? nextType : webDoc.actionType;
+      }
+      if (req.body.nextFollowUpAt !== undefined) {
+        webDoc.nextFollowUpAt = parseDate(req.body.nextFollowUpAt);
+      }
+      if (req.body.statusAfter !== undefined) {
+        const nextStatus = req.body.statusAfter == null ? null : normalizeStatus(req.body.statusAfter, row.status);
+        if (!privileged && nextStatus && ['won', 'dropped', 'customer'].includes(nextStatus)) {
+          return res.status(403).json({ message: 'Only admin/manager can set final status.' });
+        }
+        webDoc.statusAfter = nextStatus;
+      }
+      if (req.body.assignedToUserId !== undefined) {
+        const followUpAssignee = await validateAssignee(businessId, req.body.assignedToUserId);
+        if (String(req.body.assignedToUserId || '').trim() && !followUpAssignee) {
+          return res.status(400).json({ message: 'Assigned follow-up user is invalid.' });
+        }
+        webDoc.assignedToUserId = followUpAssignee;
+      }
+      webDoc.history = Array.isArray(webDoc.history) ? webDoc.history : [];
+      webDoc.history.push({
+        note: webDoc.note,
+        actionType: webDoc.actionType,
+        nextFollowUpAt: webDoc.nextFollowUpAt || null,
+        statusAfter: webDoc.statusAfter || null,
+        changedByUserId: req.user._id,
+        changedAt: new Date(),
+      });
+
+      if (webDoc.statusAfter && webDoc.statusAfter !== row.status) {
+        if (FINAL_STATUSES.has(row.status) && webDoc.statusAfter !== row.status) {
+          return res.status(400).json({ message: 'Final status cannot be changed.' });
+        }
+        row.statusLogs.push({
+          fromStatus: row.status,
+          toStatus: webDoc.statusAfter,
+          changedByUserId: req.user._id,
+          note: 'Status changed via follow-up update',
+          changedAt: new Date(),
+        });
+        row.status = webDoc.statusAfter;
+      }
+
+      await webDoc.save();
+      await row.save();
+      const item = await Lead.findOne({ _id: row._id, businessId })
+        .populate('assignedTo', 'name email')
+        .populate('followUps.createdByUserId', 'name email')
+        .populate('followUps.assignedToUserId', 'name email')
+        .lean();
+      return res.status(200).json({ item });
+    }
+
     if (!privileged && !assignedToCurrent) return res.status(403).json({ message: 'Access denied.' });
 
-    const follow = (row.followUps || []).id(req.params.followUpId);
-    if (!follow) return res.status(404).json({ message: 'Follow-up not found.' });
+    const follow = followEmbedded;
 
     if (req.body.note != null) {
       const nextNote = String(req.body.note || '').trim();
@@ -500,6 +703,73 @@ exports.listFollowUps = async (req, res) => {
         });
       });
     });
+
+    const companyOid = toCompanyObjectId(businessId);
+    if (companyOid) {
+      const fuQ = { companyId: companyOid };
+      if (from || to) {
+        fuQ.createdAt = {};
+        if (from) fuQ.createdAt.$gte = from;
+        if (to) fuQ.createdAt.$lte = endOfDay(to);
+      }
+      const followDocs = await LeadFollowUp.find(fuQ)
+        .sort({ createdAt: -1 })
+        .populate('assignedToUserId', 'name email')
+        .populate('createdByUserId', 'name email')
+        .lean();
+      const leadIdStrs = [...new Set(followDocs.map((d) => String(d.leadId || '')).filter((id) => id && mongoose.Types.ObjectId.isValid(id)))];
+      if (leadIdStrs.length) {
+        const lq = {
+          _id: { $in: leadIdStrs.map((id) => new mongoose.Types.ObjectId(id)) },
+          businessId,
+          convertedToCustomer: { $ne: true },
+          status: { $ne: 'customer' },
+        };
+        if (status) lq.status = status;
+        const leadRows = await Lead.find(lq)
+          .select('leadName companyName status phoneNumber emailId assignedTo createdBy')
+          .lean();
+        const leadMap = new Map(leadRows.map((x) => [String(x._id), x]));
+        const rx =
+          search &&
+          new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        for (const f of followDocs) {
+          const l = leadMap.get(String(f.leadId));
+          if (!l) continue;
+          if (!followUpVisibleToUser(f, l, req.user)) continue;
+          const createdAt = f.createdAt ? new Date(f.createdAt) : null;
+          if (from && (!createdAt || createdAt < from)) continue;
+          if (to && (!createdAt || createdAt > endOfDay(to))) continue;
+          if (rx) {
+            const ok =
+              rx.test(String(f.note || '')) ||
+              rx.test(String(l.leadName || '')) ||
+              rx.test(String(l.companyName || '')) ||
+              rx.test(String(l.phoneNumber || '')) ||
+              rx.test(String(l.emailId || ''));
+            if (!ok) continue;
+          }
+          items.push({
+            followUpId: f._id,
+            leadId: l._id,
+            leadName: l.leadName,
+            companyName: l.companyName,
+            status: l.status,
+            followUpType: f.actionType || 'call',
+            nextFollowUpDate: f.nextFollowUpAt || null,
+            notes: f.note || '',
+            notesPreview: String(f.note || '').slice(0, 120),
+            createdBy: f.createdByUserId || null,
+            createdAt: f.createdAt || null,
+            updatedAt: f.updatedAt || null,
+            assignedTo: f.assignedToUserId || null,
+            statusAfter: f.statusAfter || null,
+            history: Array.isArray(f.history) ? f.history : [],
+          });
+        }
+      }
+    }
+
     items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     return res.status(200).json({ items });
   } catch (e) {
@@ -548,6 +818,47 @@ exports.listUpcomingFollowUps = async (req, res) => {
         }
       });
     });
+    const companyOid = toCompanyObjectId(businessId);
+    if (companyOid) {
+      const upcomingDocs = await LeadFollowUp.find({
+        companyId: companyOid,
+        nextFollowUpAt: { $gte: new Date() },
+      })
+        .populate('assignedToUserId', 'name email')
+        .lean();
+      const leadIdStrs = [
+        ...new Set(upcomingDocs.map((d) => String(d.leadId || '')).filter((id) => id && mongoose.Types.ObjectId.isValid(id))),
+      ];
+      if (leadIdStrs.length) {
+        const leadRows = await Lead.find({
+          _id: { $in: leadIdStrs.map((id) => new mongoose.Types.ObjectId(id)) },
+          businessId,
+          convertedToCustomer: { $ne: true },
+          status: { $ne: 'customer' },
+        })
+          .select('leadName companyName status assignedTo createdBy')
+          .lean();
+        const leadMap = new Map(leadRows.map((x) => [String(x._id), x]));
+        upcomingDocs.forEach((f) => {
+          if (!f.nextFollowUpAt || new Date(f.nextFollowUpAt).getTime() < now) return;
+          const l = leadMap.get(String(f.leadId));
+          if (!l) return;
+          if (!followUpVisibleToUser(f, l, req.user)) return;
+          items.push({
+            leadId: l._id,
+            leadName: l.leadName,
+            companyName: l.companyName,
+            status: l.status,
+            assignedTo: l.assignedTo || null,
+            followUpAssignedTo: f.assignedToUserId || null,
+            note: f.note,
+            actionType: f.actionType,
+            nextFollowUpAt: f.nextFollowUpAt,
+          });
+        });
+      }
+    }
+
     items.sort((a, b) => new Date(a.nextFollowUpAt).getTime() - new Date(b.nextFollowUpAt).getTime());
     return res.status(200).json({ items });
   } catch (e) {

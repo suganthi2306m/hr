@@ -470,17 +470,50 @@ async function listAllCustomerFollowUps(req, res, next) {
     if (!company?._id) return res.json({ items: [] });
 
     const search = String(req.query.search || '').trim();
-    const customerQuery = { companyId: company._id };
-    if (search) {
-      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      customerQuery.$or = [
-        { customerName: rx },
-        { companyName: rx },
-        { emailId: rx },
-        { customerNumber: rx },
-      ];
+    const customerIdParam = String(req.query.customerId || '').trim();
+    const userIdParam = String(req.query.userId || '').trim();
+    const noteSearch = String(req.query.noteSearch || '').trim();
+    const customerStatusParam = String(req.query.customerStatus || '').trim().toLowerCase();
+    const customerStatusFilter =
+      customerStatusParam === 'active' || customerStatusParam === 'inactive' ? customerStatusParam : '';
+    const companyNameExact = String(req.query.companyName || '').trim();
+
+    let customers;
+    if (mongoose.Types.ObjectId.isValid(customerIdParam)) {
+      const one = await Customer.findOne({ _id: customerIdParam, companyId: company._id })
+        .select('_id customerName companyName emailId customerNumber customerStatus segment')
+        .lean();
+      if (!one) return res.json({ items: [] });
+      if (customerStatusFilter && String(one.customerStatus || 'active').toLowerCase() !== customerStatusFilter) {
+        return res.json({ items: [] });
+      }
+      if (companyNameExact && String(one.companyName || '').trim() !== companyNameExact) {
+        return res.json({ items: [] });
+      }
+      if (search) {
+        const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        const hay = [one.customerName, one.companyName, one.emailId, one.customerNumber].map((x) => String(x || ''));
+        if (!hay.some((s) => rx.test(s))) return res.json({ items: [] });
+      }
+      customers = [one];
+    } else {
+      const parts = [{ companyId: company._id }];
+      if (customerStatusFilter) parts.push({ customerStatus: customerStatusFilter });
+      if (companyNameExact) parts.push({ companyName: companyNameExact });
+      if (search) {
+        const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        parts.push({
+          $or: [
+            { customerName: rx },
+            { companyName: rx },
+            { emailId: rx },
+            { customerNumber: rx },
+          ],
+        });
+      }
+      const customerQuery = parts.length === 1 ? parts[0] : { $and: parts };
+      customers = await Customer.find(customerQuery).select('_id customerName companyName customerStatus segment').lean();
     }
-    const customers = await Customer.find(customerQuery).select('_id customerName companyName').lean();
     const custById = new Map(customers.map((c) => [String(c._id), c]));
     const customerIds = customers.map((c) => c._id);
     if (!customerIds.length) return res.json({ items: [] });
@@ -492,6 +525,15 @@ async function listAllCustomerFollowUps(req, res, next) {
       q.nextFollowUpAt = {};
       if (from) q.nextFollowUpAt.$gte = followupStartOfDay(from);
       if (to) q.nextFollowUpAt.$lte = followupEndOfDay(to);
+    }
+    if (noteSearch) {
+      const nrx = new RegExp(noteSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      q.note = nrx;
+    }
+    if (userIdParam && mongoose.Types.ObjectId.isValid(userIdParam)) {
+      const uid = await validateAssignee(company._id, userIdParam);
+      if (!uid) return res.json({ items: [] });
+      q.$or = [{ assignedToUserId: uid }, { createdByUserId: uid }];
     }
 
     const rows = await CustomerFollowUp.find(q)
@@ -510,6 +552,8 @@ async function listAllCustomerFollowUps(req, res, next) {
           customerId: cust._id,
           customerName: cust.customerName,
           companyName: cust.companyName || '',
+          customerStatus: cust.customerStatus || 'active',
+          segment: cust.segment || 'lead',
           followUpType: f.actionType || 'call',
           nextFollowUpDate: f.nextFollowUpAt || null,
           notes: f.note || '',

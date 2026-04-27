@@ -1,20 +1,58 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useOutletContext } from 'react-router-dom';
-import clsx from 'clsx';
+import { useNavigate } from 'react-router-dom';
+import dayjs from 'dayjs';
 import apiClient from '../api/client';
 import LocationLoadingIndicator from '../components/common/LocationLoadingIndicator';
 import SlideOverPanel from '../components/common/SlideOverPanel';
+import TablePagination from '../components/common/TablePagination';
 import UiSelect from '../components/common/UiSelect';
 import MapLocationPickerScreen from '../components/map/MapLocationPickerScreen';
 import { useGoogleMaps } from '../context/GoogleMapsContext';
 import { parseGeocodeResult } from '../utils/googleAddress';
+import { employeeSelectLabel } from '../utils/employeeSelectLabel';
 import { TASK_LIFECYCLE_STATUSES, TASK_PRIORITIES, TASK_TYPES } from '../constants/rbac';
 
-const PAGE_SIZE = 12;
+function csvEscape(value) {
+  const s = value == null ? '' : String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
 
-function isTaskCompleted(task) {
-  const st = String(task.status || '').toLowerCase();
-  return st === 'completed' || st === 'verified';
+function downloadTasksCsv(filename, header, rows) {
+  const body = [header.map(csvEscape).join(','), ...rows.map((r) => r.map(csvEscape).join(','))].join('\n');
+  const blob = new Blob([`\uFEFF${body}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function normTaskStatus(s) {
+  const x = String(s || '').toLowerCase().trim();
+  if (x === 'progress') return 'in_progress';
+  return x;
+}
+
+function taskCreatedDateKey(iso) {
+  if (!iso) return null;
+  const d = dayjs(iso);
+  return d.isValid() ? d.format('YYYY-MM-DD') : null;
+}
+
+function assignedUserIdStr(task) {
+  const u = task.assignedUser;
+  if (!u) return '';
+  if (typeof u === 'object' && u._id != null) return String(u._id);
+  return String(u);
+}
+
+function taskCustomerIdStr(task) {
+  const c = task.customerId;
+  if (!c) return '';
+  if (typeof c === 'object' && c._id != null) return String(c._id);
+  return String(c);
 }
 
 function taskMatchesSearch(task, customers, q) {
@@ -22,7 +60,7 @@ function taskMatchesSearch(task, customers, q) {
     .trim()
     .toLowerCase();
   if (!s) return true;
-  const cust = customers.find((c) => String(c._id) === String(task.customerId || ''));
+  const cust = customers.find((c) => String(c._id) === taskCustomerIdStr(task));
   const parts = [
     task.taskCode,
     task.taskName,
@@ -57,7 +95,6 @@ const defaultTask = {
 
 function FieldTasksPage() {
   const navigate = useNavigate();
-  const { setDashboardTrail } = useOutletContext() || {};
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -68,10 +105,15 @@ function FieldTasksPage() {
   const [mapPickerOpen, setMapPickerOpen] = useState(false);
   const [fillFromCustomer, setFillFromCustomer] = useState(false);
   const [lastMapPin, setLastMapPin] = useState(null);
-  const [statusTab, setStatusTab] = useState('all');
+  const [filterEmployeeId, setFilterEmployeeId] = useState('');
+  const [filterTaskCustomerId, setFilterTaskCustomerId] = useState('');
+  const [createdFrom, setCreatedFrom] = useState(() => dayjs().format('YYYY-MM-DD'));
+  const [createdTo, setCreatedTo] = useState(() => dayjs().format('YYYY-MM-DD'));
+  const [taskStatusFilter, setTaskStatusFilter] = useState('');
   const [taskSearchQuery, setTaskSearchQuery] = useState('');
   const [loadingData, setLoadingData] = useState(true);
   const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(12);
   const { isLoaded } = useGoogleMaps();
 
   const loadData = useCallback(async () => {
@@ -98,31 +140,159 @@ function FieldTasksPage() {
     loadData();
   }, [loadData]);
 
-  useEffect(() => {
-    if (!setDashboardTrail) return undefined;
-    setDashboardTrail(
-      <h1 className="truncate text-lg font-bold tracking-tight text-dark sm:text-xl">Field tasks</h1>,
+  const employeeFilterOptions = useMemo(() => {
+    const sorted = [...users].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    return [
+      { value: '', label: 'All employees' },
+      ...sorted.map((u) => ({ value: String(u._id), label: employeeSelectLabel(u) })),
+    ];
+  }, [users]);
+
+  const customerFilterOptions = useMemo(() => {
+    const sorted = [...customers].sort((a, b) =>
+      String(a.customerName || a.companyName || '').localeCompare(String(b.customerName || b.companyName || '')),
     );
-    return () => setDashboardTrail(null);
-  }, [setDashboardTrail]);
+    return [
+      { value: '', label: 'All customers' },
+      ...sorted.map((c) => ({
+        value: String(c._id),
+        label: [c.customerName, c.companyName].filter(Boolean).join(' — ') || 'Customer',
+      })),
+    ];
+  }, [customers]);
+
+  const taskStatusFilterOptions = useMemo(
+    () => [
+      { value: '', label: 'All statuses' },
+      ...TASK_LIFECYCLE_STATUSES.map((s) => ({ value: s, label: s.replace(/_/g, ' ') })),
+    ],
+    [],
+  );
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {
-      if (statusTab === 'completed' && !isTaskCompleted(t)) return false;
-      if (statusTab === 'pending' && isTaskCompleted(t)) return false;
+      if (filterEmployeeId && assignedUserIdStr(t) !== filterEmployeeId) return false;
+      if (filterTaskCustomerId && taskCustomerIdStr(t) !== filterTaskCustomerId) return false;
+      if (taskStatusFilter && normTaskStatus(t.status) !== normTaskStatus(taskStatusFilter)) return false;
+      if (createdFrom || createdTo) {
+        const dayKey = taskCreatedDateKey(t.createdAt);
+        if (dayKey == null) return false;
+        if (createdFrom && dayKey < createdFrom) return false;
+        if (createdTo && dayKey > createdTo) return false;
+      }
       if (!taskMatchesSearch(t, customers, taskSearchQuery)) return false;
       return true;
     });
-  }, [tasks, statusTab, taskSearchQuery, customers]);
-  const tableTotalPages = Math.max(1, Math.ceil(filteredTasks.length / PAGE_SIZE));
+  }, [
+    tasks,
+    customers,
+    taskSearchQuery,
+    filterEmployeeId,
+    filterTaskCustomerId,
+    createdFrom,
+    createdTo,
+    taskStatusFilter,
+  ]);
+  const tableTotalPages = Math.max(1, Math.ceil(filteredTasks.length / tablePageSize));
   const pagedTasks = useMemo(() => {
-    const start = (tablePage - 1) * PAGE_SIZE;
-    return filteredTasks.slice(start, start + PAGE_SIZE);
-  }, [filteredTasks, tablePage]);
+    const start = (tablePage - 1) * tablePageSize;
+    return filteredTasks.slice(start, start + tablePageSize);
+  }, [filteredTasks, tablePage, tablePageSize]);
 
   useEffect(() => {
     setTablePage(1);
-  }, [statusTab, taskSearchQuery]);
+  }, [
+    taskSearchQuery,
+    filterEmployeeId,
+    filterTaskCustomerId,
+    createdFrom,
+    createdTo,
+    taskStatusFilter,
+  ]);
+
+  const resetFieldTaskFilters = useCallback(() => {
+    const t = dayjs().format('YYYY-MM-DD');
+    setCreatedFrom(t);
+    setCreatedTo(t);
+    setFilterEmployeeId('');
+    setFilterTaskCustomerId('');
+    setTaskStatusFilter('');
+    setTaskSearchQuery('');
+    setTablePage(1);
+    void loadData();
+  }, [loadData]);
+
+  const exportFilteredTasksCsv = useCallback(() => {
+    if (!filteredTasks.length) return;
+    const header = [
+      'Task code',
+      'Title',
+      'Type',
+      'Priority',
+      'Status',
+      'Assigned user',
+      'Customer',
+      'Destination',
+      'Completion due',
+      'Created',
+    ];
+    const rows = filteredTasks.map((task) => {
+      const cust = customers.find((c) => String(c._id) === taskCustomerIdStr(task));
+      const customerLabel = [cust?.companyName, cust?.customerName].filter(Boolean).join(' — ') || '';
+      const dest = task.destinationLocation;
+      const destText =
+        task.location ||
+        [dest?.address, dest?.city, dest?.state, dest?.pincode].filter(Boolean).join(', ') ||
+        (dest?.lat != null && dest?.lng != null ? `${dest.lat}, ${dest.lng}` : '');
+      const due =
+        task.completionDate != null
+          ? dayjs(task.completionDate).format('YYYY-MM-DD HH:mm')
+          : '';
+      const created =
+        task.createdAt != null && dayjs(task.createdAt).isValid()
+          ? dayjs(task.createdAt).format('YYYY-MM-DD HH:mm')
+          : '';
+      return [
+        task.taskCode || '',
+        task.taskName || task.title || '',
+        task.taskType || '',
+        task.priority || '',
+        String(task.status || '').replace(/_/g, ' '),
+        task.assignedUser?.name || task.assignedUser?.email || '',
+        customerLabel,
+        destText,
+        due,
+        created,
+      ];
+    });
+    const q = String(taskSearchQuery || '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .slice(0, 24);
+    const parts = [
+      createdFrom,
+      createdTo,
+      taskStatusFilter || 'all-status',
+      filterEmployeeId ? 'emp' : '',
+      filterTaskCustomerId ? 'cust' : '',
+      q,
+    ].filter(Boolean);
+    const suffix = parts.join('_');
+    downloadTasksCsv(
+      `field-tasks_${dayjs().format('YYYY-MM-DD')}${suffix ? `_${suffix}` : ''}.csv`,
+      header,
+      rows,
+    );
+  }, [
+    filteredTasks,
+    customers,
+    taskSearchQuery,
+    createdFrom,
+    createdTo,
+    taskStatusFilter,
+    filterEmployeeId,
+    filterTaskCustomerId,
+  ]);
 
   useEffect(() => {
     if (tablePage > tableTotalPages) setTablePage(tableTotalPages);
@@ -294,7 +464,7 @@ function FieldTasksPage() {
       title: task.taskName || task.title || '',
       description: task.description,
       assignedUser: task.assignedUser?._id || '',
-      customerId: task.customerId || '',
+      customerId: taskCustomerIdStr(task),
       destinationLocation: {
         lat: d.lat != null ? Number(d.lat) : null,
         lng: d.lng != null ? Number(d.lng) : null,
@@ -367,61 +537,125 @@ function FieldTasksPage() {
     <section className="space-y-4">
       <div className="flux-card overflow-auto p-4 shadow-panel-lg">
         <div className="mb-4 flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              className="btn-primary inline-flex h-11 w-11 shrink-0 items-center justify-center p-0 sm:h-auto sm:w-auto sm:px-4 sm:py-2.5"
-              title="Import from Excel"
-              aria-label="Import from Excel"
-              onClick={() => navigate('/dashboard/track/fieldtasks/import')}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5 sm:mr-2" aria-hidden>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 17V8m-4 3 4-4 4 4" />
-                <path strokeLinecap="round" d="M5 21h14" />
-              </svg>
-              <span className="hidden font-semibold sm:inline">Import</span>
-            </button>
-            <button type="button" onClick={startCreate} className="btn-primary gap-2">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              Create task
-            </button>
-          </div>
-          <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
-            <div className="inline-flex shrink-0 rounded-full border border-neutral-200 bg-flux-panel p-0.5">
-              {[
-                { id: 'all', label: 'All' },
-                { id: 'pending', label: 'Pending' },
-                { id: 'completed', label: 'Completed' },
-              ].map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setStatusTab(opt.id)}
-                  className={clsx(
-                    'rounded-full px-3 py-1.5 text-xs font-semibold transition',
-                    statusTab === opt.id ? 'bg-white text-dark shadow-sm' : 'text-slate-600 hover:text-dark',
-                  )}
-                >
-                  {opt.label}
-                </button>
-              ))}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
+            <div className="form-field min-w-0 lg:col-span-3">
+              <label htmlFor="field-task-filter-employee" className="form-label-muted text-xs">
+                Assigned employee
+              </label>
+              <UiSelect
+                id="field-task-filter-employee"
+                value={filterEmployeeId}
+                onChange={setFilterEmployeeId}
+                options={employeeFilterOptions}
+                searchable
+              />
             </div>
-            <div className="min-w-0 flex-1 lg:max-w-md">
-              <label htmlFor="field-task-search" className="sr-only">
-                Search tasks
+            <div className="form-field min-w-0 lg:col-span-3">
+              <label htmlFor="field-task-filter-customer" className="form-label-muted text-xs">
+                Customer
+              </label>
+              <UiSelect
+                id="field-task-filter-customer"
+                value={filterTaskCustomerId}
+                onChange={setFilterTaskCustomerId}
+                options={customerFilterOptions}
+                searchable
+              />
+            </div>
+            <div className="form-field min-w-0 lg:col-span-2">
+              <label htmlFor="field-task-status-filter" className="form-label-muted text-xs">
+                Task status
+              </label>
+              <UiSelect
+                id="field-task-status-filter"
+                value={taskStatusFilter}
+                onChange={setTaskStatusFilter}
+                options={taskStatusFilterOptions}
+                className="capitalize"
+                menuClassName="capitalize"
+              />
+            </div>
+            <div className="form-field min-w-0 lg:col-span-2">
+              <label htmlFor="field-task-created-from" className="form-label-muted text-xs">
+                Created from
+              </label>
+              <input
+                id="field-task-created-from"
+                type="date"
+                className="form-input max-w-[10.5rem] py-2.5"
+                value={createdFrom}
+                onChange={(e) => setCreatedFrom(e.target.value)}
+              />
+            </div>
+            <div className="form-field min-w-0 lg:col-span-2">
+              <label htmlFor="field-task-created-to" className="form-label-muted text-xs">
+                Created to
+              </label>
+              <input
+                id="field-task-created-to"
+                type="date"
+                className="form-input max-w-[10.5rem] py-2.5"
+                value={createdTo}
+                onChange={(e) => setCreatedTo(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="btn-secondary inline-flex h-10 w-10 shrink-0 items-center justify-center p-0"
+                title="Reset filters to today and reload"
+                aria-label="Reset filters to today and reload"
+                onClick={() => resetFieldTaskFilters()}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4" aria-hidden>
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <path d="M21 3v6h-6" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary shrink-0 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!filteredTasks.length}
+                onClick={() => exportFilteredTasksCsv()}
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
+                className="btn-primary inline-flex h-11 shrink-0 items-center justify-center gap-2 px-3 sm:px-4"
+                title="Import from Excel"
+                aria-label="Import from Excel"
+                onClick={() => navigate('/dashboard/track/fieldtasks/import')}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5" aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 17V8m-4 3 4-4 4 4" />
+                  <path strokeLinecap="round" d="M5 21h14" />
+                </svg>
+                <span className="font-semibold">Import</span>
+              </button>
+              <button type="button" onClick={startCreate} className="btn-primary inline-flex h-11 shrink-0 items-center gap-2 px-3 sm:px-4">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                Create task
+              </button>
+            </div>
+            <div className="form-field min-w-0 min-h-[2.75rem] flex-1 sm:min-w-[12rem]">
+              <label htmlFor="field-task-search" className="form-label-muted text-xs">
+                Search
               </label>
               <input
                 id="field-task-search"
                 className="form-input py-2.5"
                 value={taskSearchQuery}
                 onChange={(e) => setTaskSearchQuery(e.target.value)}
-                placeholder="Search by title, task code, id, company, customer, assignee…"
+                placeholder="Title, code, id, company, customer, assignee…"
               />
             </div>
-            <p className="text-sm text-slate-500 lg:ml-auto">
-              {filteredTasks.length} of {tasks.length} shown
+            <p className="shrink-0 pb-1 text-sm text-slate-500 sm:ml-auto sm:self-end">
+              {filteredTasks.length} of {tasks.length} match filters
             </p>
           </div>
         </div>
@@ -460,6 +694,11 @@ function FieldTasksPage() {
                 <td>{task.assignedUser?.name || '-'}</td>
                 <td>{task.location}</td>
                 <td className="capitalize">{(task.status || '').replace(/_/g, ' ')}</td>
+                <td className="whitespace-nowrap text-slate-600">
+                  {task.createdAt && dayjs(task.createdAt).isValid()
+                    ? dayjs(task.createdAt).format('YYYY-MM-DD HH:mm')
+                    : '—'}
+                </td>
                 <td>
                   <div className="flex items-center gap-2">
                     <button
@@ -498,36 +737,26 @@ function FieldTasksPage() {
             ))}
             {!pagedTasks.length && (
               <tr>
-                <td className="py-8 text-center text-slate-600" colSpan={8}>
+                <td className="py-8 text-center text-slate-600" colSpan={9}>
                   {tasks.length ? 'No tasks match your filters.' : 'No field tasks yet. Create one or import from Excel.'}
                 </td>
               </tr>
             )}
           </tbody>
           </table>
-          {filteredTasks.length > PAGE_SIZE && (
-            <div className="mt-4 flex justify-end">
-              <nav className="inline-flex items-center gap-1 rounded-xl border border-neutral-200 bg-flux-panel px-1.5 py-1 shadow-sm">
-                <button
-                  type="button"
-                  className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-white disabled:opacity-40"
-                  disabled={tablePage <= 1}
-                  onClick={() => setTablePage((p) => Math.max(1, p - 1))}
-                >
-                  Prev
-                </button>
-                <span className="px-2 text-sm text-slate-600">
-                  {tablePage} / {tableTotalPages}
-                </span>
-                <button
-                  type="button"
-                  className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-white disabled:opacity-40"
-                  disabled={tablePage >= tableTotalPages}
-                  onClick={() => setTablePage((p) => Math.min(tableTotalPages, p + 1))}
-                >
-                  Next
-                </button>
-              </nav>
+          {!loadingData && (
+            <div className="mt-4">
+              <TablePagination
+                page={tablePage}
+                pageSize={tablePageSize}
+                totalCount={filteredTasks.length}
+                onPageChange={(next) => setTablePage(Math.max(1, next))}
+                onPageSizeChange={(nextSize) => {
+                  setTablePageSize(nextSize);
+                  setTablePage(1);
+                }}
+                pageSizeOptions={[10, 12, 25, 50]}
+              />
             </div>
           )}
           </>
@@ -798,46 +1027,6 @@ function FieldTasksPage() {
               }))}
             />
           </div>
-
-          <div className="rounded-xl border border-dashed border-neutral-300 bg-white/80 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Task geo-fence (optional)</p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <input
-                className="form-input"
-                placeholder="Zone name"
-                value={payload.geofenceName}
-                onChange={(e) => setPayload((o) => ({ ...o, geofenceName: e.target.value }))}
-              />
-              <input
-                className="form-input"
-                placeholder="Radius (m)"
-                value={payload.geofenceRadiusM}
-                onChange={(e) => setPayload((o) => ({ ...o, geofenceRadiusM: e.target.value }))}
-              />
-              <input
-                className="form-input"
-                placeholder="Lat"
-                value={payload.geofenceLat}
-                onChange={(e) => setPayload((o) => ({ ...o, geofenceLat: e.target.value }))}
-              />
-              <input
-                className="form-input"
-                placeholder="Lng"
-                value={payload.geofenceLng}
-                onChange={(e) => setPayload((o) => ({ ...o, geofenceLng: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-neutral-200/90 bg-flux-panel px-4 py-3 text-sm font-medium text-slate-700">
-            <input
-              type="checkbox"
-              className="form-checkbox"
-              checked={payload.generateOtp}
-              onChange={(e) => setPayload((o) => ({ ...o, generateOtp: e.target.checked }))}
-            />
-            Generate completion OTP (shown in task details / mobile)
-          </label>
 
           <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
             <button type="button" onClick={closePanel} className="btn-secondary">
