@@ -224,7 +224,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   Future<void> _syncPresenceTrackingFromAttendance(
     List<AttendanceRecord> history,
   ) async {
-    if (history.isEmpty) return;
     final now = DateTime.now();
     AttendanceRecord? todayOpen;
     for (final r in history) {
@@ -240,10 +239,9 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (loc != null && (loc.lat != 0 || loc.lng != 0)) {
         await PresenceTrackingService().pinOfficeZoneAtCheckIn(loc.lat, loc.lng);
       }
-      await PresenceTrackingService().ensureTrackingIfPunchedIn(true);
-    } else {
-      await PresenceTrackingService().ensureTrackingIfPunchedIn(false);
     }
+    // Daily auto-run: starts from 09:00 even without attendance check-in.
+    await PresenceTrackingService().ensureAutoDailyTracking();
   }
 
   bool _sameCalendarDay(DateTime a, DateTime b) {

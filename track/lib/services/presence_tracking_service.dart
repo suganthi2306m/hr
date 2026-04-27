@@ -613,6 +613,19 @@ class PresenceTrackingService {
     await _schedulePresenceSends();
   }
 
+  /// Starts daily presence tracking without requiring attendance check-in.
+  /// Server-side rules still block writes on week off / approved leave.
+  Future<void> ensureAutoDailyTracking() async {
+    if (_taskInProgress) return;
+    final status = await getPresenceStatus();
+    if (status['canTrack'] != true) {
+      await stopTracking();
+      return;
+    }
+    await setTrackingAllowed();
+    await _schedulePresenceSends();
+  }
+
   Future<Map<String, dynamic>> getPresenceStatus() async {
     await _setToken();
     try {

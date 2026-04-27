@@ -587,9 +587,6 @@ async function computePresenceStatusForOffice(lat, lng, branchId, accuracyM = 0)
  * and legacy punch schemas.
  */
 async function validateAttendanceForPresence(staffId, companyId = null) {
-  if (!Attendance) {
-    return { canTrack: true };
-  }
   if (!staffId) {
     return { canTrack: false, reason: 'no_staff_id' };
   }
@@ -601,125 +598,8 @@ async function validateAttendanceForPresence(staffId, companyId = null) {
   if (dayBlockReason === 'week_off') {
     return { canTrack: false, reason: 'week_off' };
   }
-
-  const uidClause = attendanceUserIdClause(staffId);
-
-  // Mobile app attendances (attendanceController): userId or legacy `user`, open session, must have check-in time.
-  let attendance = await Attendance.findOne(openSessionAndCheckInQuery(uidClause))
-    .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
-    .lean();
-
-  // Same calendar day (server local).
-  if (!attendance) {
-    const dayStart = startOfLocalDay(new Date());
-    const dayEnd = endOfLocalDay(new Date());
-    attendance = await Attendance.findOne({
-      $and: [
-        staffOwnsAttendanceRow(uidClause),
-        { checkInTime: { $gte: dayStart, $lte: dayEnd } },
-        noCheckoutClause(),
-        hasRealCheckInClause(),
-      ],
-    })
-      .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
-      .lean();
-  }
-
-  // Web/admin rows often have checkInAt only (no checkInTime).
-  if (!attendance) {
-    const dayStart = startOfLocalDay(new Date());
-    const dayEnd = endOfLocalDay(new Date());
-    attendance = await Attendance.findOne({
-      $and: [
-        staffOwnsAttendanceRow(uidClause),
-        { checkInAt: { $gte: dayStart, $lte: dayEnd } },
-        noCheckoutClause(),
-        hasRealCheckInClause(),
-      ],
-    })
-      .sort({ checkInAt: -1, checkInTime: -1, punchIn: -1 })
-      .lean();
-  }
-
-  if (!attendance) {
-    const dayStart = startOfLocalDay(new Date());
-    const dayEnd = endOfLocalDay(new Date());
-    attendance = await Attendance.findOne({
-      $and: [
-        staffOwnsAttendanceRow(uidClause),
-        { attendanceDate: { $gte: dayStart, $lte: dayEnd } },
-        noCheckoutClause(),
-        hasRealCheckInClause(),
-      ],
-    })
-      .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
-      .lean();
-  }
-
-  if (!attendance) {
-    const now = new Date();
-    const year = now.getUTCFullYear();
-    const month = now.getUTCMonth();
-    const day = now.getUTCDate();
-    const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
-    const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999));
-
-    attendance = await Attendance.findOne({
-      employeeId: staffId,
-      date: { $gte: startOfDay, $lte: endOfDay },
-      ...hasRealCheckInClause(),
-    }).lean();
-
-    if (!attendance) {
-      attendance = await Attendance.findOne({
-        user: staffId,
-        date: { $gte: startOfDay, $lte: endOfDay },
-        ...hasRealCheckInClause(),
-      }).lean();
-    }
-
-    // Fallback: open punch (no punchOut) within 48h — fixes UTC vs local date mismatch on attendance.date
-    if (!attendance) {
-      const since = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-      attendance = await Attendance.findOne({
-        employeeId: staffId,
-        punchIn: { $ne: null, $gte: since },
-        punchOut: null,
-      })
-        .sort({ punchIn: -1 })
-        .lean();
-    }
-    if (!attendance) {
-      const since = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-      attendance = await Attendance.findOne({
-        user: staffId,
-        punchIn: { $ne: null, $gte: since },
-        punchOut: null,
-      })
-        .sort({ punchIn: -1 })
-        .lean();
-    }
-  }
-
-  if (!attendance) return { canTrack: false, reason: 'no_attendance' };
-
-  const punchInMs = resolvePunchInMs(attendance);
-  const punchOut = attendance.checkOutTime ?? attendance.punchOut ?? attendance.checkOutAt;
-  const leaveType = attendance.leaveType;
-  const leaveKind = attendance.leaveKind;
-  const dayStatus = attendance.dayStatus;
-
-  if (punchInMs == null) return { canTrack: false, reason: 'no_attendance' };
-  if (punchOut != null && punchOut !== '') {
-    const outMs = punchOut instanceof Date ? punchOut.getTime() : new Date(punchOut).getTime();
-    if (Number.isFinite(outMs) && outMs > 0) {
-      return { canTrack: false, reason: 'checked_out' };
-    }
-  }
-  if (leaveType != null && String(leaveType).trim() !== '') return { canTrack: false, reason: 'on_leave' };
-  if (leaveKind != null && String(leaveKind).trim() !== '') return { canTrack: false, reason: 'on_leave' };
-  if (String(dayStatus || '').toUpperCase() === 'LEAVE') return { canTrack: false, reason: 'on_leave' };
-
+  // Business rule update: presence tracking should auto-run daily (09:00-19:30)
+  // even when attendance check-in is missing. We still block on approved leave/week off.
   return { canTrack: true };
 }
 
