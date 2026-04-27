@@ -90,7 +90,19 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   Future<void> _syncPresenceTrackingFromHistory() async {
     final history = _history;
     if (history.isEmpty) return;
-    final latest = history.first;
+    final now = DateTime.now();
+    AttendanceRecord? latestToday;
+    for (final row in history) {
+      if (!_sameCalendarDay(row.checkInTime, now)) continue;
+      if (latestToday == null || row.checkInTime.isAfter(latestToday.checkInTime)) {
+        latestToday = row;
+      }
+    }
+    if (latestToday == null) {
+      await PresenceTrackingService().ensureTrackingIfPunchedIn(false);
+      return;
+    }
+    final latest = latestToday;
     final punchedIn = latest.checkOutTime == null;
     if (punchedIn) {
       final loc = latest.checkInLocation;

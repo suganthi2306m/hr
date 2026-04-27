@@ -463,6 +463,17 @@ function noOpenCheckoutClause() {
   };
 }
 
+/** Any attendance row that belongs to the provided local calendar day. */
+function attendanceOnDayClause(dayStart, dayEnd) {
+  return {
+    $or: [
+      { attendanceDate: { $gte: dayStart, $lte: dayEnd } },
+      { checkInTime: { $gte: dayStart, $lte: dayEnd } },
+      { checkInAt: { $gte: dayStart, $lte: dayEnd } },
+    ],
+  };
+}
+
 /** Resolve punch-in instant for duration (mobile checkInTime, web checkInAt, legacy punchIn). */
 function resolveCheckInDate(att) {
   if (!att || typeof att !== 'object') return null;
@@ -543,14 +554,14 @@ exports.checkIn = async (req, res) => {
       Attendance.findOne({
         userId: user._id,
         companyId: user.companyId,
-        ...noOpenCheckoutClause(),
+        $and: [noOpenCheckoutClause(), attendanceOnDayClause(dayStart, dayEnd)],
       })
         .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
         .lean(),
       Attendance.findOne({
         userId: user._id,
         companyId: user.companyId,
-        attendanceDate: { $gte: dayStart, $lte: dayEnd },
+        ...attendanceOnDayClause(dayStart, dayEnd),
       })
         .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
         .lean(),
@@ -771,11 +782,14 @@ exports.checkOut = async (req, res) => {
       });
     }
     const checkoutGeofenceCtx = checkoutGeofenceAssert.ctx;
+    const now = new Date();
+    const dayStart = startOfDay(now);
+    const dayEnd = endOfDay(now);
 
     const attendance = await Attendance.findOne({
       userId: user._id,
       companyId: user.companyId,
-      ...noOpenCheckoutClause(),
+      $and: [noOpenCheckoutClause(), attendanceOnDayClause(dayStart, dayEnd)],
     })
       .sort({ checkInTime: -1, checkInAt: -1, punchIn: -1 })
       .lean();
