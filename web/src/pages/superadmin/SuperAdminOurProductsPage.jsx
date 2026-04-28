@@ -158,7 +158,6 @@ export default function SuperAdminOurProductsPage() {
             <thead className="bg-neutral-50 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Product</th>
-                <th className="px-4 py-3">Video</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -185,13 +184,6 @@ export default function SuperAdminOurProductsPage() {
                     {p.shortDescription ? (
                       <p className="mt-1 line-clamp-2 text-xs text-slate-600">{p.shortDescription}</p>
                     ) : null}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-slate-600">
-                    {p.videoUrl?.trim() ? (
-                      <span className="font-semibold text-emerald-700">Yes</span>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span
