@@ -90,7 +90,11 @@ async function listProducts(req, res, next) {
     if (!company?._id) return res.status(400).json({ message: 'Complete company setup first.' });
     const co = await Company.findById(company._id).select('createdBySuperAdminId').lean();
     const partnerId = co?.createdBySuperAdminId;
-    const items = await CompanyProduct.find(productScopeOrForCompany(company._id, partnerId))
+    const items = await CompanyProduct.find({
+      ...productScopeOrForCompany(company._id, partnerId),
+      status: 'active',
+      showInApp: true,
+    })
       .sort({ updatedAt: -1 })
       .lean();
     return res.json({ items: items.map((p) => toItem(p)) });

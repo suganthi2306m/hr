@@ -29,6 +29,8 @@ export default function SuperAdminOurProductsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [panelOpen, setPanelOpen] = useState(false);
   const [editingId, setEditingId] = useState('');
   const [form, setForm] = useState(emptyForm);
@@ -136,13 +138,61 @@ export default function SuperAdminOurProductsPage() {
     }
   };
 
-  const rows = useMemo(() => items.slice(), [items]);
+  const rows = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return items.filter((item) => {
+      const statusOk = statusFilter === 'all' ? true : item.status === statusFilter;
+      if (!statusOk) return false;
+      if (!q) return true;
+      const haystack = [
+        item.name,
+        item.shortDescription,
+        item.fullDescription,
+        item.offerTag,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [items, searchTerm, statusFilter]);
 
   return (
     <div className="space-y-4">
       {error ? (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</div>
       ) : null}
+
+      <div className="rounded-2xl border border-neutral-200 bg-white p-3 shadow-sm sm:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="flex-1">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Search products</span>
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search by name, tag, or description…"
+              className="mt-1.5 w-full rounded-xl border border-neutral-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+            />
+          </label>
+          <label className="w-full sm:w-48">
+            <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="mt-1.5 w-full rounded-xl border border-neutral-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+            >
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </label>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Showing <span className="font-semibold text-slate-700">{rows.length}</span> of{' '}
+          <span className="font-semibold text-slate-700">{items.length}</span> products
+        </p>
+      </div>
 
       {loading ? (
         <div className="flex justify-center py-16">
