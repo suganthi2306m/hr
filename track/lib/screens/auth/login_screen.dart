@@ -623,7 +623,23 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildAnimatedBrandWord() {
-    const letters = ['L', 'i', 'v', 'e', 'T', 'r', 'a', 'c', 'k'];
+    const letters = [
+      'C',
+      'u',
+      's',
+      't',
+      'o',
+      'm',
+      'e',
+      'r',
+      'C',
+      'o',
+      'n',
+      'n',
+      'e',
+      'c',
+      't',
+    ];
     return AnimatedBuilder(
       animation: _brandProgress,
       builder: (context, _) {

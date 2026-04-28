@@ -90,8 +90,6 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
   final TextEditingController _companyCtrl = TextEditingController();
   DateTime? _fromDate;
   DateTime? _toDate;
-  DateTime? _leadFromDate;
-  DateTime? _leadToDate;
   bool _filtersOpen = false;
   Timer? _leadSuggestDebounce;
   List<LeadItem> _leadSearchSuggestions = const [];
@@ -127,8 +125,8 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
       final rows = await _leadService.listLeads(
         search: _searchCtrl.text.trim(),
         status: _status,
-        from: _leadFromDate,
-        to: _leadToDate,
+        from: null,
+        to: null,
       );
       final followUps = await _leadService.listFollowUps(
         search: _searchCtrl.text.trim(),
@@ -194,8 +192,8 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
         final list = await _leadService.listLeads(
           search: q,
           status: _status,
-          from: _leadFromDate,
-          to: _leadToDate,
+          from: null,
+          to: null,
         );
         if (!mounted) return;
         setState(() {
@@ -531,37 +529,6 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
     }
   }
 
-  Future<void> _pickLeadListDate({required bool from}) async {
-    final now = DateTime.now();
-    final initial = from ? (_leadFromDate ?? now) : (_leadToDate ?? _leadFromDate ?? now);
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(now.year - 3),
-      lastDate: DateTime(now.year + 3),
-    );
-    if (picked == null || !mounted) return;
-    setState(() {
-      if (from) {
-        _leadFromDate = picked;
-        if (_leadToDate != null && _leadToDate!.isBefore(_leadFromDate!)) _leadToDate = _leadFromDate;
-      } else {
-        _leadToDate = picked;
-      }
-      _leadsPage = 1;
-    });
-    await _load();
-  }
-
-  void _clearLeadDates() {
-    setState(() {
-      _leadFromDate = null;
-      _leadToDate = null;
-      _leadsPage = 1;
-    });
-    _load();
-  }
-
   Future<void> _openFollowUpDetail(FollowUpFeedItem row) async {
     final changed = await Navigator.push<bool>(
       context,
@@ -838,39 +805,6 @@ class _LeadListScreenState extends State<LeadListScreen> with MainShellSwipeNavi
                         _load();
                       },
                     ),
-                    if (_tabIndex == 0) ...[
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => _pickLeadListDate(from: true),
-                              child: Text(
-                                _leadFromDate == null
-                                    ? 'From'
-                                    : 'From: ${_leadFromDate!.toLocal().toString().split(' ').first}',
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => _pickLeadListDate(from: false),
-                              child: Text(
-                                _leadToDate == null
-                                    ? 'To'
-                                    : 'To: ${_leadToDate!.toLocal().toString().split(' ').first}',
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Clear lead dates',
-                            onPressed: _clearLeadDates,
-                            icon: const Icon(Icons.clear_rounded),
-                          ),
-                        ],
-                      ),
-                    ],
                   ],
                 ],
               ),

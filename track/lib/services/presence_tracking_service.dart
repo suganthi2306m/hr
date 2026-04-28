@@ -423,16 +423,41 @@ class PresenceTrackingService {
     double? accuracyM,
     double? speedMps,
   }) async {
-    if (!_isWithinLocationTrackingWindow()) return;
-    if (await LiveTrackingService().isActive()) return;
-    if (!await isBackgroundPresenceEnabled()) return;
+    if (!_isWithinLocationTrackingWindow()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_store_bg SKIP outside_window');
+      }
+      return;
+    }
+    if (await LiveTrackingService().isActive()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_store_bg SKIP task_live_tracking_active');
+      }
+      return;
+    }
+    if (!await isBackgroundPresenceEnabled()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_store_bg SKIP background_presence_disabled');
+      }
+      return;
+    }
 
     final self = PresenceTrackingService();
-    if (!await self.isTrackingAllowed()) return;
+    if (!await self.isTrackingAllowed()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_store_bg SKIP tracking_not_allowed');
+      }
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
     final token = _sanitizeStoredToken(prefs.getString('token'));
-    if (token == null || token.isEmpty) return;
+    if (token == null || token.isEmpty) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_store_bg SKIP missing_auth_token');
+      }
+      return;
+    }
 
     // Do **not** bail out when prefs still say `foreground`. This method is only invoked from
     // [backgroundCallback] (native location → headless isolate). After swipe-away / process
@@ -460,6 +485,9 @@ class PresenceTrackingService {
     if (lastAttemptMs != null &&
         lastAttemptMs > 0 &&
         (nowMs - lastAttemptMs) < trackingInterval.inMilliseconds) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_store_bg SKIP throttled_interval');
+      }
       return;
     }
     await prefs.setInt(_kPresenceLastBackgroundAttemptTime, nowMs);
@@ -1327,17 +1355,40 @@ class PresenceTrackingService {
   }
 
   Future<void> _periodicTick() async {
-    if (!_isTracking || _taskInProgress) return;
-    if (_periodicTickInProgress) return;
+    if (!_isTracking || _taskInProgress) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_periodic SKIP inactive_or_task_in_progress');
+      }
+      return;
+    }
+    if (_periodicTickInProgress) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_periodic SKIP already_running');
+      }
+      return;
+    }
     if (!await isTrackingAllowed()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_periodic STOP tracking_not_allowed');
+      }
       stopTracking();
       return;
     }
-    if (!_isWithinLocationTrackingWindow()) return;
+    if (!_isWithinLocationTrackingWindow()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_periodic SKIP outside_window');
+      }
+      return;
+    }
     _periodicTickInProgress = true;
     try {
       final status = await getPresenceStatus();
       if (status['canTrack'] != true) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint(
+            '[Trackings] presence_periodic STOP canTrack=false reason=${status['reason']}',
+          );
+        }
         await stopTracking();
         return;
       }
@@ -1367,20 +1418,41 @@ class PresenceTrackingService {
 
   /// First send + periodic uploads. Ensures a tracking record is inserted every 1 minute while checked in.
   Future<void> _schedulePresenceSends() async {
-    if (_taskInProgress) return;
-    if (!await isTrackingAllowed()) return;
+    // Keep this as print (not debugPrint) so we can confirm terminal pipe works
+    // even when debug logger filtering is suspected.
+    print('[TrackingsProbe] _schedulePresenceSends entered');
+    if (_taskInProgress) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_schedule SKIP task_in_progress');
+      }
+      return;
+    }
+    if (!await isTrackingAllowed()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_schedule SKIP tracking_not_allowed');
+      }
+      return;
+    }
 
     _isTracking = true;
     await MovementClassificationService().start();
     await flushPendingPresenceQueue();
     await _ensureBackgroundPresenceTracking();
     if (!_isWithinLocationTrackingWindow()) {
+      if (kDebugMode && AppConstants.logTrackingsToConsole) {
+        debugPrint('[Trackings] presence_schedule WAIT outside_window');
+      }
       _restartPeriodicPresenceTimer();
       return;
     }
     try {
       final status = await getPresenceStatus();
       if (status['canTrack'] != true) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint(
+            '[Trackings] presence_schedule STOP canTrack=false reason=${status['reason']}',
+          );
+        }
         await stopTracking();
         return;
       }

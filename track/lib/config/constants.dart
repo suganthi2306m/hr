@@ -3,7 +3,8 @@ class AppConstants {
 
   /// Default app (mobile) API — Render `backend` service.
   /// Override: `flutter run --dart-define=APP_API_BASE_URL=...`
-  static const String _defaultApiBaseUrl ='https://hr-app-tmi3.onrender.com/api';
+  static const String _defaultApiBaseUrl ='https://hr-app-tmi3.onrender.com/api';//'http://192.168.1.33:9001/api';
+  //'https://hr-app-tmi3.onrender.com/api';
   //'http://192.168.1.35:9001/api';
   //'https://hr-app-tmi3.onrender.com/api';
   //'http://192.168.1.33:9001/api';
@@ -75,8 +76,7 @@ class AppConstants {
   }
 
   /// Debug console: presence + live task tracking POSTs (flutter run / debug only).
-  // static const bool logTrackingsToConsole = true;
-  static const bool logTrackingsToConsole = false;
+  static const bool logTrackingsToConsole = true;
 
   /// Smart visit automation: geofence-style auto check-in/out + offline queue sync.
   static const bool enableSmartVisitSync = true;

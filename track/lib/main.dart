@@ -10,6 +10,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:background_location_tracker/background_location_tracker.dart';
+import 'config/constants.dart';
 import 'services/alarm_service.dart';
 import 'services/attendance_alarm_log.dart';
 import 'services/auth_service.dart';
@@ -63,6 +64,11 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+      // Unconditional startup line to verify terminal receives Dart stdout.
+      print(
+        '[BootLog] app_main_started debug=$kDebugMode release=$kReleaseMode '
+        'trackingLogs=${AppConstants.logTrackingsToConsole}',
+      );
 
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         try {

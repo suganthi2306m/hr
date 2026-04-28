@@ -417,17 +417,49 @@ class LiveTrackingService {
     double? accuracyM,
   }) async {
     try {
-      if (!AppConstants.isWithinLocationTrackingWindow()) return;
+      if (!AppConstants.isWithinLocationTrackingWindow()) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint('[Trackings] task_store SKIP outside_window');
+        }
+        return;
+      }
       final prefs = await SharedPreferences.getInstance();
       final active = prefs.getBool(_keyActive);
-      if (active != true) return;
+      if (active != true) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint('[Trackings] task_store SKIP live_tracking_inactive');
+        }
+        return;
+      }
       final taskMongoId = prefs.getString(_keyTaskMongoId);
       final baseUrl = prefs.getString(_keyBaseUrl);
       final token = _sanitizeStoredToken(prefs.getString(_keyToken));
-      if (taskMongoId == null || taskMongoId.isEmpty) return;
-      if (baseUrl == null || baseUrl.isEmpty) return;
-      if (token == null || token.isEmpty) return;
-      if (accuracyM != null && accuracyM > kMaxAccuracyM) return;
+      if (taskMongoId == null || taskMongoId.isEmpty) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint('[Trackings] task_store SKIP missing_task_id');
+        }
+        return;
+      }
+      if (baseUrl == null || baseUrl.isEmpty) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint('[Trackings] task_store SKIP missing_base_url');
+        }
+        return;
+      }
+      if (token == null || token.isEmpty) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint('[Trackings] task_store SKIP missing_auth_token');
+        }
+        return;
+      }
+      if (accuracyM != null && accuracyM > kMaxAccuracyM) {
+        if (kDebugMode && AppConstants.logTrackingsToConsole) {
+          debugPrint(
+            '[Trackings] task_store SKIP low_accuracy acc=${accuracyM.toStringAsFixed(1)}m',
+          );
+        }
+        return;
+      }
       final capturedAt = DateTime.now().toUtc();
       final appStatus = await _getLifecycleAppStatusForBackgroundLogs();
       if (kDebugMode && AppConstants.logTrackingsToConsole) {

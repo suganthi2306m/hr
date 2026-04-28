@@ -93,7 +93,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final now = DateTime.now();
     AttendanceRecord? latestToday;
     for (final row in history) {
-      if (!_sameCalendarDay(row.checkInTime, now)) continue;
+      if (DateDisplayUtil.dateOnlyLocal(row.checkInTime) !=
+          DateDisplayUtil.dateOnlyLocal(now)) {
+        continue;
+      }
       if (latestToday == null || row.checkInTime.isAfter(latestToday.checkInTime)) {
         latestToday = row;
       }

@@ -94,6 +94,8 @@ function endOfLocalDay(d = new Date()) {
 
 const TRACKING_WINDOW_START_MINUTES = 9 * 60; // 09:00
 const TRACKING_WINDOW_END_MINUTES = (19 * 60) + 30; // 19:30
+const TRACKING_WINDOW_TIMEZONE =
+  process.env.TRACKING_WINDOW_TIMEZONE || 'Asia/Kolkata';
 const WEEKLY_OFF_DAY_KEYS = [
   'sunday',
   'monday',
@@ -105,7 +107,20 @@ const WEEKLY_OFF_DAY_KEYS = [
 ];
 
 function isWithinLocationTrackingWindow(now = new Date()) {
-  const minutes = (now.getHours() * 60) + now.getMinutes();
+  let minutes;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: TRACKING_WINDOW_TIMEZONE,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(now);
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+    const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+    minutes = (hour * 60) + minute;
+  } catch (_) {
+    minutes = (now.getHours() * 60) + now.getMinutes();
+  }
   return (
     minutes >= TRACKING_WINDOW_START_MINUTES &&
     minutes <= TRACKING_WINDOW_END_MINUTES

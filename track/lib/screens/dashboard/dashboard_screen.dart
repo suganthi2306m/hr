@@ -22,7 +22,6 @@ import 'package:track/screens/profile/profile_screen.dart';
 import 'package:track/screens/visits/visits_screen.dart';
 import 'package:track/screens/settings/settings_screen.dart';
 import 'package:track/screens/leave/leave_request_screen.dart';
-import 'package:track/services/attendance_alarm_log.dart';
 import 'package:track/services/attendance_alarm_punch_state.dart';
 import 'package:track/services/attendance_alarm_scheduler.dart';
 import 'package:track/services/attendance_service.dart';
@@ -229,13 +228,13 @@ class _DashboardScreenState extends State<DashboardScreen>
     for (final r in history) {
       if (!_sameCalendarDay(r.checkInTime, now)) continue;
       if (r.checkOutTime != null) continue;
-      if (todayOpen == null || r.checkInTime.isAfter(todayOpen!.checkInTime)) {
+      if (todayOpen == null || r.checkInTime.isAfter(todayOpen.checkInTime)) {
         todayOpen = r;
       }
     }
     final punchedInToday = todayOpen != null;
     if (punchedInToday) {
-      final loc = todayOpen!.checkInLocation;
+      final loc = todayOpen.checkInLocation;
       if (loc != null && (loc.lat != 0 || loc.lng != 0)) {
         await PresenceTrackingService().pinOfficeZoneAtCheckIn(loc.lat, loc.lng);
       }
@@ -621,29 +620,28 @@ class _DashboardScreenState extends State<DashboardScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      const TextSpan(
-                        text: 'Live',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          letterSpacing: -0.5,
-                        ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Customer',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        letterSpacing: -0.5,
                       ),
-                      TextSpan(
-                        text: 'Track',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          color: _ink,
-                          letterSpacing: -0.5,
-                        ),
+                    ),
+                    Text(
+                      'Connect',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        color: _ink,
+                        letterSpacing: -0.5,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -1185,12 +1183,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                               tooltip: 'Dashboard',
                               onTap: () => _bootstrap(),
                             ),
-                            _shortcutChip(
-                              icon: Icons.alarm_rounded,
-                              selected: false,
-                              tooltip: 'Attendance alarms',
-                              onTap: () => showAttendanceAlarmSetupSheet(context),
-                            ),
+                            if (1 == 0)
+                              _shortcutChip(
+                                icon: Icons.alarm_rounded,
+                                selected: false,
+                                tooltip: 'Attendance alarms',
+                                onTap: () => showAttendanceAlarmSetupSheet(context),
+                              ),
                             _shortcutChip(
                               icon: Icons.event_note_rounded,
                               selected: false,

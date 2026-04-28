@@ -142,7 +142,7 @@ export default function SuperAdminCompanyCreatePage() {
       });
       navigate('/super/companies');
     } catch (err) {
-      setError(getApiErrorMessage(err, 'Could not create company.'));
+      setError(getApiErrorMessage(err, 'Could not save company.'));
     } finally {
       setSaving(false);
     }
@@ -164,7 +164,7 @@ export default function SuperAdminCompanyCreatePage() {
               Cancel
             </Link>
             <button type="submit" className="btn-primary" disabled={saving || (form.generateLicense && !plans.length)}>
-              {saving ? 'Creating…' : 'Create company'}
+              {saving ? 'Saving…' : 'Save company'}
             </button>
           </>
         }
@@ -350,6 +350,12 @@ export default function SuperAdminCompanyCreatePage() {
           />
         </Field>
       </Section>
+
+      <div className="flex justify-end">
+        <button type="submit" className="btn-primary" disabled={saving || (form.generateLicense && !plans.length)}>
+          {saving ? 'Saving…' : 'Save company'}
+        </button>
+      </div>
     </form>
   );
 }

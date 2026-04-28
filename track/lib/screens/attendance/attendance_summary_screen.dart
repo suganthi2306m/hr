@@ -19,7 +19,6 @@ import 'package:track/utils/weekly_off_policy.dart';
 import 'package:track/widgets/app_feedback.dart';
 import 'package:track/navigation/main_shell_navigation.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
-import 'package:track/widgets/attendance_alarm_sheet.dart';
 
 /// Month-scrolling attendance calendar with stats and per-day rows (fast list + optional cache).
 class AttendanceSummaryScreen extends StatefulWidget {
@@ -406,14 +405,6 @@ class _AttendanceSummaryScreenState extends State<AttendanceSummaryScreen>
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.35,
                         ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Attendance alarms',
-                      onPressed: () => showAttendanceAlarmSetupSheet(context),
-                      icon: Icon(
-                        Icons.alarm_rounded,
-                        color: Colors.black.withValues(alpha: 0.82),
                       ),
                     ),
                     IconButton(
