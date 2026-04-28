@@ -6,6 +6,13 @@ import 'api_client.dart';
 class ProductService {
   final ApiClient _api = ApiClient();
 
+  bool _isActiveAndVisible(Map<String, dynamic> item) {
+    final status = '${item['status'] ?? 'active'}'.trim().toLowerCase();
+    final showInApp = item['showInApp'];
+    final visible = showInApp == null ? true : showInApp == true;
+    return status == 'active' && visible;
+  }
+
   Future<void> _setToken() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
@@ -17,7 +24,20 @@ class ProductService {
     final response = await _api.dio.get<Map<String, dynamic>>('/products/home');
     final data = response.data;
     if (data == null) return CompanyProductHome.empty();
-    return CompanyProductHome.fromJson(data);
+    List<Map<String, dynamic>> keep(dynamic raw) {
+      if (raw is! List) return const [];
+      return raw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .where(_isActiveAndVisible)
+          .toList();
+    }
+
+    return CompanyProductHome.fromJson({
+      ...data,
+      'banners': keep(data['banners']),
+      'highlighted': keep(data['highlighted']),
+    });
   }
 
   Future<List<CompanyProductCard>> fetchCatalog() async {
@@ -29,7 +49,9 @@ class ProductService {
     if (raw is! List) return [];
     return raw
         .whereType<Map>()
-        .map((e) => CompanyProductCard.fromJson(Map<String, dynamic>.from(e)))
+        .map((e) => Map<String, dynamic>.from(e))
+        .where(_isActiveAndVisible)
+        .map(CompanyProductCard.fromJson)
         .toList();
   }
 
@@ -39,6 +61,8 @@ class ProductService {
     final body = response.data;
     final item = body?['item'];
     if (item is! Map) return null;
-    return CompanyProductDetail.fromJson(Map<String, dynamic>.from(item));
+    final mapped = Map<String, dynamic>.from(item);
+    if (!_isActiveAndVisible(mapped)) return null;
+    return CompanyProductDetail.fromJson(mapped);
   }
 }
