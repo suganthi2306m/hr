@@ -91,12 +91,17 @@ function LiveTrackPage() {
   const routeOrderedRef = useRef([]);
   const historyUserIdRef = useRef('');
   const routeDateRef = useRef(routeDate);
+  const allowedUserIdsRef = useRef(new Set());
 
   const { isLoaded } = useGoogleMaps();
 
   useEffect(() => {
     routeDateRef.current = routeDate;
   }, [routeDate]);
+
+  useEffect(() => {
+    allowedUserIdsRef.current = new Set(users.map((u) => String(u._id)));
+  }, [users]);
 
   const loadBootstrap = useCallback(async () => {
     try {
@@ -209,6 +214,10 @@ function LiveTrackPage() {
     });
 
     socket.on('location:update', (entry) => {
+      const allowed = allowedUserIdsRef.current;
+      if (!allowed.has(String(entry?.userId || ''))) {
+        return;
+      }
       setTrackingPoints((prev) => {
         const withoutUser = prev.filter((item) => item.userId !== entry.userId);
         return [...withoutUser, entry];

@@ -181,14 +181,33 @@ async function upsertLocation(payload = {}) {
   return enriched;
 }
 
-async function getLatestLocations({ userId, limit = 500 } = {}) {
+async function resolveCompanyScopedUserIds(companyId) {
+  const companyIdStr = companyId != null ? String(companyId).trim() : '';
+  if (!companyIdStr || !mongoose.Types.ObjectId.isValid(companyIdStr)) return null;
+  const users = await User.find({ companyId: new mongoose.Types.ObjectId(companyIdStr) })
+    .select('_id')
+    .lean();
+  return users.map((u) => new mongoose.Types.ObjectId(String(u._id)));
+}
+
+async function getLatestLocations({ userId, limit = 500, companyId } = {}) {
   const baseQuery = {
     latitude: { $ne: null },
     longitude: { $ne: null },
   };
+  const companyUserIds = await resolveCompanyScopedUserIds(companyId);
+  if (companyUserIds) {
+    if (!companyUserIds.length) return [];
+    baseQuery.$or = [{ usersId: { $in: companyUserIds } }, { userId: { $in: companyUserIds } }, { staffId: { $in: companyUserIds } }];
+  }
   if (userId && mongoose.Types.ObjectId.isValid(String(userId))) {
     const oid = new mongoose.Types.ObjectId(String(userId));
-    baseQuery.$or = [{ usersId: oid }, { userId: oid }, { staffId: oid }];
+    if (companyUserIds && !companyUserIds.some((id) => String(id) === String(oid))) {
+      return [];
+    }
+    baseQuery.$and = [
+      { $or: [{ usersId: oid }, { userId: oid }, { staffId: oid }] },
+    ];
   }
 
   const raw = await Location.find(baseQuery)
@@ -205,9 +224,17 @@ async function getLatestLocations({ userId, limit = 500 } = {}) {
   return enrichLocationDocs([...latestByUser.values()]);
 }
 
-async function getUserHistory(userId, { limit = 200, date } = {}) {
+async function getUserHistory(userId, { limit = 200, date, companyId } = {}) {
   if (!mongoose.Types.ObjectId.isValid(String(userId))) return [];
   const oid = new mongoose.Types.ObjectId(String(userId));
+  if (companyId != null) {
+    const companyIdStr = String(companyId).trim();
+    if (!mongoose.Types.ObjectId.isValid(companyIdStr)) return [];
+    const member = await User.findOne({ _id: oid, companyId: new mongoose.Types.ObjectId(companyIdStr) })
+      .select('_id')
+      .lean();
+    if (!member) return [];
+  }
   const range = parseHistoryDateRange(date);
   const base = {
     $or: [{ usersId: oid }, { userId: oid }, { staffId: oid }],
@@ -229,9 +256,17 @@ async function getUserHistory(userId, { limit = 200, date } = {}) {
   return enrichLocationDocs(docs);
 }
 
-async function getUserRoute(userId, { date } = {}) {
+async function getUserRoute(userId, { date, companyId } = {}) {
   if (!mongoose.Types.ObjectId.isValid(String(userId))) return [];
   const oid = new mongoose.Types.ObjectId(String(userId));
+  if (companyId != null) {
+    const companyIdStr = String(companyId).trim();
+    if (!mongoose.Types.ObjectId.isValid(companyIdStr)) return [];
+    const member = await User.findOne({ _id: oid, companyId: new mongoose.Types.ObjectId(companyIdStr) })
+      .select('_id')
+      .lean();
+    if (!member) return [];
+  }
   const range = parseHistoryDateRange(date);
   const base = {
     $or: [{ usersId: oid }, { userId: oid }, { staffId: oid }],
