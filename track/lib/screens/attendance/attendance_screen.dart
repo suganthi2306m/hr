@@ -14,6 +14,7 @@ import 'package:track/screens/attendance/attendance_summary_screen.dart';
 import 'package:track/widgets/app_feedback.dart';
 import 'package:track/widgets/app_shell_navigation.dart';
 import 'package:track/widgets/app_tab_loader.dart';
+import 'package:track/widgets/attendance_alarm_sheet.dart';
 
 /// Bottom-nav **Attendance** tab: server-backed history only (no punch / leave on this screen).
 class AttendanceScreen extends StatefulWidget {
@@ -152,6 +153,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       appBar: AppBar(
         title: const Text('Attendance history'),
         actions: [
+          IconButton(
+            tooltip: 'Attendance alarms',
+            onPressed: () => showAttendanceAlarmSetupSheet(context),
+            icon: const Icon(Icons.alarm_rounded),
+          ),
           IconButton(
             tooltip: 'Monthly summary',
             onPressed: () {

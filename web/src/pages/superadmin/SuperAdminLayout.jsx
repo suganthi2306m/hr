@@ -13,6 +13,7 @@ const baseNav = [
   { to: '/super/notifications', label: 'Notifications', icon: 'bell', badge: 0 },
   { to: '/super/plans', label: 'Plans', icon: 'layers' },
   { to: '/super/integrations', label: 'Integrations', icon: 'plug' },
+  { to: '/super/our-products', label: 'Our Products', icon: 'products' },
   { to: '/super/settings', label: 'Settings', icon: 'gear' },
 ];
 
@@ -153,6 +154,7 @@ export default function SuperAdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
 
   const titleParts = useMemo(() => pageTitleParts(location.pathname), [location.pathname]);
+  const isOurProductsPage = /\/super\/our-products\/?$/.test(location.pathname);
 
   const handleLogout = () => {
     logout();
@@ -259,6 +261,15 @@ export default function SuperAdminLayout() {
             {titleParts.second ? <span className="text-dark"> {titleParts.second}</span> : null}
           </h1>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            {isOurProductsPage ? (
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('livetrack-superadmin-add-product'))}
+                className="rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-dark shadow-sm transition hover:brightness-95"
+              >
+                Add product
+              </button>
+            ) : null}
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-dark shadow-sm">
               {initials}
             </div>

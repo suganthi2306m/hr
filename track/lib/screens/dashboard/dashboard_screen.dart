@@ -103,7 +103,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen>
     with MainShellSwipeNavigation {
-  static const bool _showOurProductsCard = false;
+  static const bool _showOurProductsCard = true;
   static const Color _bg = Colors.white;
   static const Color _card = Colors.white;
   static const Color _ink = Color(0xFF1A1A1A);
@@ -1183,13 +1183,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                               tooltip: 'Dashboard',
                               onTap: () => _bootstrap(),
                             ),
-                            if (1 == 0)
-                              _shortcutChip(
-                                icon: Icons.alarm_rounded,
-                                selected: false,
-                                tooltip: 'Attendance alarms',
-                                onTap: () => showAttendanceAlarmSetupSheet(context),
-                              ),
+                            _shortcutChip(
+                              icon: Icons.alarm_rounded,
+                              selected: false,
+                              tooltip: 'Attendance alarms',
+                              onTap: () => showAttendanceAlarmSetupSheet(context),
+                            ),
                             _shortcutChip(
                               icon: Icons.event_note_rounded,
                               selected: false,

@@ -307,6 +307,13 @@ function DashboardLayout() {
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
+                  onClick={() => navigate('/dashboard/our-products')}
+                  className="rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-dark shadow-sm transition hover:brightness-95"
+                >
+                  Our Products
+                </button>
+                <button
+                  type="button"
                   onClick={() => setIsMobileSidebarOpen(true)}
                   className="inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-dark shadow-sm hover:bg-neutral-50 md:hidden"
                 >

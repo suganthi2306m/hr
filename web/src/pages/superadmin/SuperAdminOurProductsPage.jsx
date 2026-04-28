@@ -274,16 +274,6 @@ export default function SuperAdminOurProductsPage() {
             />
           </div>
           <div>
-            <label className="text-xs font-bold uppercase text-slate-500">Video URL</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm"
-              placeholder="https://… (mp4, YouTube, etc.)"
-              value={form.videoUrl}
-              onChange={(e) => setForm((f) => ({ ...f, videoUrl: e.target.value }))}
-            />
-            <p className="mt-1 text-xs text-slate-500">Optional. Opens in the device browser or video app.</p>
-          </div>
-          <div>
             <label className="text-xs font-bold uppercase text-slate-500">Additional images (max {MAX_EXTRA_IMAGES})</label>
             <p className="mt-0.5 text-xs text-slate-500">Optional gallery photos shown with the product.</p>
             <div className="mt-2 space-y-2">
